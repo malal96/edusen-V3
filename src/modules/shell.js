@@ -41,6 +41,7 @@ export function afficherApp() {
   const app = document.getElementById('app');
   app.innerHTML = `
     <div class="app-shell">
+      <div class="sidebar-overlay" id="sidebar-overlay"></div>
       <aside class="sidebar" id="sidebar">
         <div class="sidebar-logo">🎓 EduSen</div>
         <nav class="sidebar-nav">
@@ -58,7 +59,10 @@ export function afficherApp() {
       </aside>
       <main class="main-content">
         <div class="topbar">
-          <h1 class="topbar-title" id="page-title">Chargement...</h1>
+          <div style="display:flex;align-items:center;gap:12px;min-width:0;flex:1">
+            <button id="btn-burger" class="btn-burger" aria-label="Menu">☰</button>
+            <h1 class="topbar-title" id="page-title" style="margin:0">Chargement...</h1>
+          </div>
           <div class="topbar-meta">
             <span id="status-indicator" class="status-indicator ${getCurrentStatus()}">
               <span class="status-dot ${getCurrentStatus() === 'online' ? '' : 'pulse'}"></span>
@@ -73,7 +77,12 @@ export function afficherApp() {
 
   // Events
   document.querySelectorAll('[data-onglet]').forEach(btn => {
-    btn.onclick = () => naviguer(btn.dataset.onglet);
+    btn.onclick = () => {
+      naviguer(btn.dataset.onglet);
+      // Fermer la sidebar sur mobile après navigation
+      document.getElementById('sidebar').classList.remove('open');
+      document.getElementById('sidebar-overlay').classList.remove('open');
+    };
   });
   document.getElementById('btn-logout').onclick = () => {
     if (confirm('Voulez-vous vraiment vous déconnecter ?')) {
@@ -81,6 +90,16 @@ export function afficherApp() {
       window.EduSen.currentUser = null;
       afficherEcranLogin();
     }
+  };
+  // Bouton hamburger : ouvrir/fermer la sidebar sur mobile
+  document.getElementById('btn-burger').onclick = () => {
+    document.getElementById('sidebar').classList.toggle('open');
+    document.getElementById('sidebar-overlay').classList.toggle('open');
+  };
+  // Cliquer sur l'overlay : fermer la sidebar
+  document.getElementById('sidebar-overlay').onclick = () => {
+    document.getElementById('sidebar').classList.remove('open');
+    document.getElementById('sidebar-overlay').classList.remove('open');
   };
 
   naviguer(ongletActif);
