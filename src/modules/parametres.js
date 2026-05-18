@@ -1,19 +1,22 @@
 import { store, initStore, sauvegarderEcole, sauvegarderParametres } from '../lib/store.js';
 import { trierClassesScolaire, DEFAULT_MATIERES, DEFAULT_COEFFICIENTS } from '../lib/constants.js';
-import { getAllUsers, createUser, updateUser, deleteUser } from '../lib/auth.js';
+import { getAllUsers, createUser, updateUser, deleteUser, regenererCodeRecuperation } from '../lib/auth.js';
 import { escapeHtml, toast, formaterFCFA } from '../lib/ui.js';
 
 let matieresClasseActive = null;  // classe sélectionnée dans la gestion des matières
 
 export async function afficherParametres() {
   await initStore();
-  // Charger les utilisateurs
+  // Charger les utilisateurs (utile seulement pour l'admin, mais on charge quand même pour le store)
   store.users = await getAllUsers();
   const user = window.EduSen.currentUser;
   const estAdmin = user.role === 'admin';
+  const estGestionnaire = user.role === 'gestionnaire';
+  const peutGererParametres = estAdmin || estGestionnaire;  // admin + gestionnaire ont accès aux paramètres généraux
   const c = document.getElementById('page-content');
 
-  if (!estAdmin) {
+  if (!peutGererParametres) {
+    // Enseignant : juste son compte
     c.innerHTML = `<div class="card"><div class="card-title">Mon compte</div>
       <div style="margin-bottom:12px"><strong>Nom :</strong> ${escapeHtml(user.nom)}</div>
       <div style="margin-bottom:12px"><strong>Identifiant :</strong> ${escapeHtml(user.login)}</div>
@@ -96,11 +99,13 @@ export async function afficherParametres() {
         <div id="p-salles-list"></div>
       </div>
 
+      ${estAdmin ? `
       <div class="card">
         <div class="card-title">👥 Utilisateurs</div>
         <button class="btn btn-primary btn-sm" id="p-user-add" style="margin-bottom:14px">+ Créer un utilisateur</button>
         <div id="p-users-list"></div>
       </div>
+      ` : ''}
     </div>
   `;
 
@@ -171,7 +176,7 @@ export async function afficherParametres() {
 
   rendreClasses();
   rendreSalles();
-  rendreUsers();
+  if (estAdmin) rendreUsers();
 
   // Init classe active pour matières
   if (!matieresClasseActive || !store.classes.includes(matieresClasseActive)) {
@@ -207,7 +212,9 @@ export async function afficherParametres() {
     toast(`Salle "${nom}" ajoutée`, 'success');
   };
 
-  document.getElementById('p-user-add').onclick = () => ouvrirModalUtilisateur(null);
+  if (estAdmin) {
+    document.getElementById('p-user-add').onclick = () => ouvrirModalUtilisateur(null);
+  }
 
   // ===== Events matières =====
   document.getElementById('p-mat-classe').onchange = (e) => {
@@ -422,20 +429,41 @@ function rendreSalles() {
 
 function rendreUsers() {
   const el = document.getElementById('p-users-list');
-  el.innerHTML = store.users.map(u => `
-    <div style="display:flex;align-items:center;gap:10px;padding:10px;border-bottom:1px solid var(--border)">
+  if (!el) return;
+  // Trier : admin en premier, puis par nom
+  const usersTries = [...store.users].sort((a, b) => {
+    if (a.role === 'admin' && b.role !== 'admin') return -1;
+    if (a.role !== 'admin' && b.role === 'admin') return 1;
+    return (a.nom || '').localeCompare(b.nom || '');
+  });
+
+  el.innerHTML = usersTries.map(u => {
+    const couleurRole = u.role === 'admin' ? '#7c2d12' : u.role === 'gestionnaire' ? '#1e40af' : 'var(--green-mid)';
+    const bgRole = u.role === 'admin' ? '#fef3c7' : u.role === 'gestionnaire' ? '#dbeafe' : 'var(--green-pale)';
+    const nbAssign = (u.assignations || []).length;
+    return `
+    <div style="display:flex;align-items:center;gap:10px;padding:12px;border-bottom:1px solid var(--border)">
       <div style="flex:1">
-        <strong>${escapeHtml(u.nom)}</strong>
-        <span style="font-size:.72rem;background:var(--green-pale);color:var(--green-mid);padding:2px 8px;border-radius:10px;margin-left:8px">${u.role}</span>
-        <div style="font-size:.78rem;color:var(--text-muted)">Login: ${escapeHtml(u.login)}</div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <strong>${escapeHtml(u.nom)}</strong>
+          <span style="font-size:.72rem;background:${bgRole};color:${couleurRole};padding:2px 8px;border-radius:10px;text-transform:capitalize">${u.role}</span>
+          ${u.role === 'enseignant' && nbAssign > 0 ? `<span style="font-size:.7rem;color:var(--text-muted)">${nbAssign} assignation${nbAssign > 1 ? 's' : ''}</span>` : ''}
+        </div>
+        <div style="font-size:.78rem;color:var(--text-muted);margin-top:3px">Login : ${escapeHtml(u.login)}</div>
       </div>
-      ${u.role !== 'admin' ? `<button class="btn btn-ghost btn-sm" data-del-user="${u.id}">🗑️</button>` : ''}
+      <button class="btn btn-ghost btn-sm" data-edit-user="${u.id}" title="Modifier">✏️</button>
+      ${u.role !== 'admin' ? `<button class="btn btn-ghost btn-sm" data-del-user="${u.id}" title="Supprimer">🗑️</button>` : ''}
     </div>
-  `).join('');
+  `;
+  }).join('');
+
+  document.querySelectorAll('[data-edit-user]').forEach(b => {
+    b.onclick = () => ouvrirModalUtilisateur(b.dataset.editUser);
+  });
   document.querySelectorAll('[data-del-user]').forEach(b => {
     b.onclick = async () => {
       const u = store.users.find(x => x.id === b.dataset.delUser);
-      if (!confirm(`Supprimer le compte de "${u.nom}" ?`)) return;
+      if (!confirm(`Supprimer le compte de "${u.nom}" ?\n\nCette action est irréversible.`)) return;
       await deleteUser(u.id);
       store.users = await getAllUsers();
       rendreUsers();
@@ -445,59 +473,178 @@ function rendreUsers() {
 }
 
 function ouvrirModalUtilisateur(id) {
-  const modeEdit = !!id;
+  const u = id ? store.users.find(x => x.id === id) : null;
+  const modeEdit = !!u;
+  const estAdmin = u && u.role === 'admin';
+
+  // Pages d'accueil possibles selon le rôle
+  const PAGES = [
+    { id: 'dashboard', label: 'Tableau de bord' },
+    { id: 'eleves', label: 'Élèves' },
+    { id: 'bulletins', label: 'Bulletins' },
+    { id: 'emploidutemps', label: 'Emploi du temps' },
+    { id: 'presences', label: 'Présences' },
+    { id: 'facturation', label: 'Facturation' },
+    { id: 'documents', label: 'Documents' },
+    { id: 'parametres', label: 'Paramètres' }
+  ];
+
   document.body.insertAdjacentHTML('beforeend', `
-    <div id="modal-user" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:1000;padding:20px">
-      <div style="background:#fff;border-radius:12px;padding:24px;max-width:500px;width:100%">
-        <h2 style="font-family:var(--font-head);color:var(--green-deep);margin-bottom:16px">Nouvel utilisateur</h2>
-        <div class="form-group"><label>Nom complet *</label><input id="u-nom"/></div>
-        <div class="form-group"><label>Identifiant (login) *</label><input id="u-login"/></div>
-        <div class="form-group"><label>Mot de passe *</label><input id="u-pwd" type="password" placeholder="Au moins 6 caractères"/></div>
-        <div class="form-group"><label>Rôle *</label>
-          <select id="u-role">
-            <option value="enseignant">Enseignant</option>
-            <option value="gestionnaire">Gestionnaire</option>
-          </select>
+    <div id="modal-user" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:1000;padding:20px;overflow-y:auto">
+      <div style="background:#fff;border-radius:12px;padding:24px;max-width:600px;width:100%;max-height:95vh;overflow-y:auto">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+          <h2 style="font-family:var(--font-head);color:var(--green-deep)">${modeEdit ? `Modifier ${escapeHtml(u.nom)}` : 'Nouvel utilisateur'}</h2>
+          <button onclick="document.getElementById('modal-user').remove()" style="background:none;border:none;font-size:1.5rem;cursor:pointer">×</button>
         </div>
+
+        <div class="form-group"><label>Nom complet *</label>
+          <input id="u-nom" value="${u ? escapeHtml(u.nom) : ''}"/>
+        </div>
+        <div class="form-group"><label>Identifiant (login) *</label>
+          <input id="u-login" value="${u ? escapeHtml(u.login) : ''}"/>
+          <small style="color:var(--text-muted);font-size:.72rem">Utilisé pour se connecter (sans espace, minuscules)</small>
+        </div>
+        <div class="form-group"><label>${modeEdit ? 'Nouveau mot de passe' : 'Mot de passe'} ${modeEdit ? '' : '*'}</label>
+          <input id="u-pwd" type="password" placeholder="${modeEdit ? 'Laissez vide pour ne pas changer' : 'Au moins 6 caractères'}"/>
+          ${modeEdit ? '<small style="color:var(--text-muted);font-size:.72rem">Saisir uniquement si vous voulez changer le mot de passe</small>' : ''}
+        </div>
+
+        ${estAdmin ? `
+          <div class="form-group">
+            <label>Rôle</label>
+            <input type="text" value="Administrateur" disabled style="background:#f3f4f6;color:#6b7280"/>
+            <small style="color:var(--text-muted);font-size:.72rem">Le rôle administrateur ne peut pas être modifié</small>
+          </div>
+        ` : `
+          <div class="form-group">
+            <label>Rôle *</label>
+            <select id="u-role">
+              <option value="enseignant" ${u?.role === 'enseignant' ? 'selected' : ''}>Enseignant</option>
+              <option value="gestionnaire" ${u?.role === 'gestionnaire' ? 'selected' : ''}>Gestionnaire</option>
+            </select>
+          </div>
+        `}
+
+        <div class="form-group">
+          <label>Page d'accueil par défaut</label>
+          <select id="u-accueil">
+            ${PAGES.map(p => `<option value="${p.id}" ${u?.pageAccueil === p.id ? 'selected' : ''}>${p.label}</option>`).join('')}
+          </select>
+          <small style="color:var(--text-muted);font-size:.72rem">Page affichée après connexion</small>
+        </div>
+
         <div id="u-assignations-container"></div>
-        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:16px">
+
+        ${modeEdit ? `
+          <!-- Section Code de récupération -->
+          <div style="margin-top:16px;padding:14px;background:#fef3c7;border-left:4px solid #c9933a;border-radius:6px">
+            <div style="font-weight:600;color:#9a6b1e;margin-bottom:8px">🔑 Code de récupération</div>
+            <p style="font-size:.78rem;color:var(--text-mid);margin-bottom:8px">Ce code permet à l'utilisateur de réinitialiser son mot de passe en cas d'oubli. Communiquez-lui en privé.</p>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <code id="u-code-affiche" style="background:#fff;padding:8px 12px;border-radius:6px;font-family:monospace;font-weight:700;letter-spacing:.05em;flex:1;min-width:200px;text-align:center;border:1px solid #e5d4a8">${escapeHtml(u.codeRecuperation || '—')}</code>
+              <button class="btn btn-ghost btn-sm" id="u-code-regen" type="button">🔄 Régénérer</button>
+            </div>
+          </div>
+        ` : ''}
+
+        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:18px">
           <button class="btn btn-ghost" onclick="document.getElementById('modal-user').remove()">Annuler</button>
-          <button class="btn btn-primary" id="u-save">Créer</button>
+          <button class="btn btn-primary" id="u-save">${modeEdit ? '💾 Enregistrer' : 'Créer'}</button>
         </div>
       </div>
     </div>
   `);
 
+  // === Gestion des assignations (uniquement pour enseignant) ===
   function rendreAssignations() {
-    const role = document.getElementById('u-role').value;
+    const role = estAdmin ? 'admin' : document.getElementById('u-role').value;
     const cont = document.getElementById('u-assignations-container');
     if (role !== 'enseignant') { cont.innerHTML = ''; return; }
+
+    const assignActuelles = new Set((u?.assignations || []).map(a => `${a.classe}|${a.matiere}`));
+
     cont.innerHTML = `
-      <div class="form-group"><label>Assignations (classe + matière)</label>
-        <div style="background:var(--surface2);padding:10px;border-radius:8px;max-height:200px;overflow-y:auto">
-          ${store.classes.map(cl => (store.matieres[cl] || []).map(m => `
-            <label style="display:flex;align-items:center;gap:6px;padding:4px;font-size:.82rem"><input type="checkbox" data-assign="${cl}|${m}"/> ${cl} — ${m}</label>
-          `).join('')).join('')}
+      <div class="form-group" style="margin-top:8px">
+        <label>Assignations (classes et matières)</label>
+        <p style="font-size:.72rem;color:var(--text-muted);margin-bottom:6px">Cochez les couples classe / matière que l'enseignant prend en charge</p>
+        <div style="background:var(--surface2);padding:12px;border-radius:8px;max-height:260px;overflow-y:auto;border:1px solid var(--border)">
+          ${store.classes.map(cl => {
+            const matieres = store.matieres[cl] || [];
+            if (matieres.length === 0) return '';
+            return `
+              <details style="margin-bottom:8px">
+                <summary style="cursor:pointer;font-weight:600;color:var(--green-deep);padding:4px 0">${escapeHtml(cl)}</summary>
+                <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:4px;padding:6px 0 6px 16px">
+                  ${matieres.map(m => `
+                    <label style="display:flex;align-items:center;gap:6px;padding:3px;font-size:.82rem">
+                      <input type="checkbox" data-assign="${escapeHtml(cl)}|${escapeHtml(m)}" ${assignActuelles.has(`${cl}|${m}`) ? 'checked' : ''}/> ${escapeHtml(m)}
+                    </label>
+                  `).join('')}
+                </div>
+              </details>
+            `;
+          }).join('')}
         </div>
       </div>
     `;
   }
-  document.getElementById('u-role').onchange = rendreAssignations;
+  if (!estAdmin) document.getElementById('u-role').onchange = rendreAssignations;
   rendreAssignations();
 
+  // === Régénération du code de récupération ===
+  if (modeEdit) {
+    document.getElementById('u-code-regen').onclick = async () => {
+      if (!confirm('Régénérer un nouveau code de récupération ?\n\nL\'ancien code ne sera plus valide.')) return;
+      const nouveauCode = await regenererCodeRecuperation(u.id);
+      document.getElementById('u-code-affiche').textContent = nouveauCode;
+      u.codeRecuperation = nouveauCode;
+      toast('Nouveau code généré', 'success');
+      store.users = await getAllUsers();
+    };
+  }
+
+  // === Enregistrement ===
   document.getElementById('u-save').onclick = async () => {
     const nom = document.getElementById('u-nom').value.trim();
     const login = document.getElementById('u-login').value.trim().toLowerCase();
     const pwd = document.getElementById('u-pwd').value;
-    const role = document.getElementById('u-role').value;
-    if (!nom || !login || pwd.length < 6) { toast('Champs requis : nom, login, mot de passe (≥6 car.)', 'error'); return; }
-    const assignations = [...document.querySelectorAll('[data-assign]:checked')].map(cb => {
-      const [classe, matiere] = cb.dataset.assign.split('|');
-      return { classe, matiere };
-    });
+    const role = estAdmin ? 'admin' : document.getElementById('u-role').value;
+    const pageAccueil = document.getElementById('u-accueil').value;
+
+    if (!nom || !login) { toast('Nom et identifiant sont obligatoires', 'error'); return; }
+    if (login.includes(' ')) { toast('L\'identifiant ne peut pas contenir d\'espace', 'error'); return; }
+
+    // Vérifier l'unicité du login si modifié
+    const existant = store.users.find(x => x.login === login && x.id !== (u?.id || ''));
+    if (existant) { toast('Cet identifiant est déjà utilisé', 'error'); return; }
+
+    // Mot de passe : obligatoire à la création, optionnel à la modification
+    if (!modeEdit && pwd.length < 6) { toast('Le mot de passe doit faire au moins 6 caractères', 'error'); return; }
+    if (modeEdit && pwd && pwd.length < 6) { toast('Le nouveau mot de passe doit faire au moins 6 caractères', 'error'); return; }
+
+    // Assignations
+    const assignations = role === 'enseignant'
+      ? [...document.querySelectorAll('[data-assign]:checked')].map(cb => {
+          const [classe, matiere] = cb.dataset.assign.split('|');
+          return { classe, matiere };
+        })
+      : [];
+
     try {
-      await createUser({ login, nom, role, motdepasse: pwd, assignations, pageAccueil: role === 'enseignant' ? 'bulletins' : 'dashboard' });
-      toast('Utilisateur créé', 'success');
+      if (modeEdit) {
+        const updates = { nom, login, role, pageAccueil, assignations };
+        if (pwd) updates.motdepasse = pwd;  // hashé automatiquement par updateUser
+        await updateUser(u.id, updates);
+        toast(`Compte de ${nom} mis à jour`, 'success');
+
+        // Si on a modifié le compte de l'utilisateur courant, mettre à jour window.EduSen.currentUser
+        if (window.EduSen.currentUser && window.EduSen.currentUser.id === u.id) {
+          window.EduSen.currentUser = { ...window.EduSen.currentUser, nom, login, pageAccueil };
+        }
+      } else {
+        await createUser({ login, nom, role, motdepasse: pwd, assignations, pageAccueil });
+        toast(`Compte ${nom} créé`, 'success');
+      }
       document.getElementById('modal-user').remove();
       store.users = await getAllUsers();
       rendreUsers();

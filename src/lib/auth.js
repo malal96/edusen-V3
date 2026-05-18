@@ -137,6 +137,14 @@ export async function updateUser(id, updates) {
   await setOne(COLLECTION, id, updates);
 }
 
+// Régénère et sauvegarde un nouveau code de récupération pour un utilisateur
+// Retourne le nouveau code (à afficher à l'admin pour qu'il le note)
+export async function regenererCodeRecuperation(id) {
+  const nouveauCode = genererCodeRecup();
+  await setOne(COLLECTION, id, { codeRecuperation: nouveauCode });
+  return nouveauCode;
+}
+
 export async function deleteUser(id) {
   return deleteOne(COLLECTION, id);
 }

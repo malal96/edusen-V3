@@ -45,6 +45,14 @@ export async function afficherBulletins() {
   const c = document.getElementById('page-content');
   const user = window.EduSen.currentUser;
   const estEnseignant = user.role === 'enseignant';
+  const estGestionnaire = user.role === 'gestionnaire';
+  const lectureSeule = estEnseignant || estGestionnaire ? false : false;  // sera redéfini ci-dessous
+
+  // Permissions :
+  // - admin : tout (saisie + impression)
+  // - enseignant : saisie uniquement sur ses matières
+  // - gestionnaire : lecture seule (peut imprimer mais pas saisir)
+  const peutSaisir = user.role === 'admin' || user.role === 'enseignant';
 
   // Classes visibles
   let classes = [...store.classes];
@@ -74,8 +82,9 @@ export async function afficherBulletins() {
       <select id="b-trim" style="padding:7px 12px;border:1px solid var(--border);border-radius:6px;background:#fff">
         ${TRIMESTRES.map((t, i) => `<option value="${i+1}" ${(i+1) == trimestre ? 'selected' : ''}>${t}</option>`).join('')}
       </select>
-      <button class="btn btn-primary btn-sm" id="b-save">💾 Enregistrer les notes</button>
+      ${peutSaisir ? `<button class="btn btn-primary btn-sm" id="b-save">💾 Enregistrer les notes</button>` : ''}
     </div>
+    ${estGestionnaire ? `<div style="background:#fef9c3;border-left:4px solid #c9933a;padding:10px 14px;border-radius:6px;margin-bottom:14px;font-size:.85rem"><strong>Mode lecture seule :</strong> vous pouvez consulter les notes et imprimer les bulletins, mais pas modifier les notes.</div>` : ''}
     <div class="card" style="overflow-x:auto">
       ${matieres.length === 0 ? '<p style="color:var(--text-muted);font-style:italic">Aucune matière assignée pour cette classe.</p>' :
       eleves.length === 0 ? '<p style="color:var(--text-muted);font-style:italic">Aucun élève dans cette classe.</p>' :
@@ -92,8 +101,10 @@ export async function afficherBulletins() {
             return `<tr style="border-bottom:1px solid var(--border)">
               <td style="padding:8px"><strong>${escapeHtml(e.prenom)} ${escapeHtml(e.nom)}</strong><br><small style="color:var(--text-muted)">${e.id}</small></td>
               ${matieres.map(mat => `<td style="padding:5px;text-align:center">
-                <input type="number" min="0" max="20" step="0.25" data-eleve="${e.id}" data-mat="${mat}" value="${getNote(e.id, mat, trimestre)}"
-                  style="width:60px;padding:5px;text-align:center;border:1px solid var(--border);border-radius:4px"/>
+                ${peutSaisir
+                  ? `<input type="number" min="0" max="20" step="0.25" data-eleve="${e.id}" data-mat="${mat}" value="${getNote(e.id, mat, trimestre)}" style="width:60px;padding:5px;text-align:center;border:1px solid var(--border);border-radius:4px"/>`
+                  : `<span style="display:inline-block;min-width:40px;padding:4px 8px;background:var(--surface2);border-radius:4px;font-weight:600;color:${getNote(e.id, mat, trimestre) !== '' ? 'var(--text)' : 'var(--text-muted)'}">${getNote(e.id, mat, trimestre) !== '' ? getNote(e.id, mat, trimestre) : '—'}</span>`
+                }
               </td>`).join('')}
               ${!estEnseignant ? `<td style="padding:8px;text-align:center;font-weight:700">${moy !== null ? moy.toFixed(2) : '—'}</td>
               <td style="padding:8px;text-align:center">${m ? `<span style="padding:3px 8px;border-radius:12px;font-size:.72rem;background:${m.color}20;color:${m.color}">${m.label}</span>` : '—'}</td>
@@ -107,14 +118,16 @@ export async function afficherBulletins() {
 
   document.getElementById('b-classe').onchange = afficherBulletins;
   document.getElementById('b-trim').onchange = afficherBulletins;
-  document.getElementById('b-save').onclick = async () => {
-    document.querySelectorAll('input[data-eleve]').forEach(inp => {
-      setNote(inp.dataset.eleve, inp.dataset.mat, trimestre, inp.value);
-    });
-    await sauvegarderNotes();
-    toast('Notes enregistrées', 'success');
-    afficherBulletins();
-  };
+  if (peutSaisir) {
+    document.getElementById('b-save').onclick = async () => {
+      document.querySelectorAll('input[data-eleve]').forEach(inp => {
+        setNote(inp.dataset.eleve, inp.dataset.mat, trimestre, inp.value);
+      });
+      await sauvegarderNotes();
+      toast('Notes enregistrées', 'success');
+      afficherBulletins();
+    };
+  }
   if (!estEnseignant) {
     document.querySelectorAll('[data-print]').forEach(b => {
       b.onclick = () => imprimerBulletin(b.dataset.print, trimestre);

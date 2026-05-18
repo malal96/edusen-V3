@@ -2,31 +2,25 @@ import { store, initStore, sauvegarderEleve, supprimerEleve, sauvegarderPaiement
 import { formaterDate, escapeHtml, toast } from '../lib/ui.js';
 
 let recherche = '', filtreClasse = '', filtreStatut = '';
+let dejaRendu = false;  // savoir si le squelette est déjà rendu
 
 export async function afficherEleves() {
   await initStore();
+  dejaRendu = false;  // Toujours re-render le squelette en arrivant sur la page
+  rendreSquelette();
+}
+
+function rendreSquelette() {
   const c = document.getElementById('page-content');
   const user = window.EduSen.currentUser;
   const peutModifier = user.role === 'admin' || user.role === 'gestionnaire';
 
-  // Filtrage selon les permissions
-  let elevesVisibles = store.eleves;
+  // Classes visibles selon le rôle
   let classesAffichage = [...store.classes];
   if (user.role === 'enseignant') {
     const cl = new Set((user.assignations || []).map(a => a.classe));
-    elevesVisibles = elevesVisibles.filter(e => cl.has(e.classe));
     classesAffichage = classesAffichage.filter(c => cl.has(c));
   }
-
-  // Filtres
-  const motsR = recherche.toLowerCase().trim().split(/\s+/).filter(m => m);
-  const elvsFiltres = elevesVisibles.filter(e => {
-    const blob = `${e.prenom} ${e.nom} ${e.id} ${e.tuteur || ''} ${e.classe}`.toLowerCase();
-    const mR = motsR.length === 0 || motsR.every(m => blob.includes(m));
-    const mC = !filtreClasse || e.classe === filtreClasse;
-    const mS = !filtreStatut || e.statut === filtreStatut;
-    return mR && mC && mS;
-  });
 
   c.innerHTML = `
     <div class="card">
@@ -43,7 +37,7 @@ export async function afficherEleves() {
           <option value="inactif" ${filtreStatut === 'inactif' ? 'selected' : ''}>Inactif</option>
           <option value="transfere" ${filtreStatut === 'transfere' ? 'selected' : ''}>Transféré</option>
         </select>
-        <span style="font-size:.8rem;color:var(--text-muted)">${elvsFiltres.length} élève${elvsFiltres.length > 1 ? 's' : ''}</span>
+        <span id="el-count" style="font-size:.8rem;color:var(--text-muted)"></span>
         ${peutModifier ? `<button class="btn btn-primary btn-sm" id="btn-ajouter">+ Ajouter</button>` : ''}
       </div>
       <div style="overflow-x:auto">
@@ -55,38 +49,79 @@ export async function afficherEleves() {
             <th style="padding:10px 8px;font-size:.75rem;color:var(--text-muted);text-transform:uppercase">Statut</th>
             ${peutModifier ? `<th style="padding:10px 8px"></th>` : ''}
           </tr></thead>
-          <tbody>
-            ${elvsFiltres.length === 0 ? `<tr><td colspan="5" style="padding:30px;text-align:center;color:var(--text-muted);font-style:italic">Aucun élève</td></tr>` :
-              elvsFiltres.map(e => `
-                <tr style="border-bottom:1px solid var(--border)">
-                  <td style="padding:10px 8px">
-                    <div style="font-weight:600">${escapeHtml(e.prenom)} ${escapeHtml(e.nom)}</div>
-                    <div style="font-size:.72rem;color:var(--text-muted)">${e.id}</div>
-                  </td>
-                  <td style="padding:10px 8px">${escapeHtml(e.classe)}</td>
-                  <td style="padding:10px 8px">${escapeHtml(e.tuteur || '—')}</td>
-                  <td style="padding:10px 8px">
-                    <span style="display:inline-block;padding:3px 8px;border-radius:12px;font-size:.72rem;background:${e.statut === 'actif' ? 'var(--green-pale)' : '#fee2e2'};color:${e.statut === 'actif' ? 'var(--green-mid)' : 'var(--red-soft)'}">${e.statut}</span>
-                  </td>
-                  ${peutModifier ? `<td style="padding:10px 8px;text-align:right">
-                    <button class="btn btn-ghost btn-sm" data-action="edit" data-id="${e.id}">✏️</button>
-                    <button class="btn btn-ghost btn-sm" data-action="delete" data-id="${e.id}">🗑️</button>
-                  </td>` : ''}
-                </tr>
-              `).join('')}
-          </tbody>
+          <tbody id="el-tbody"></tbody>
         </table>
       </div>
     </div>
   `;
 
-  // Events
-  document.getElementById('el-search').addEventListener('input', (e) => { recherche = e.target.value; afficherEleves(); });
-  document.getElementById('el-classe').onchange = (e) => { filtreClasse = e.target.value; afficherEleves(); };
-  document.getElementById('el-statut').onchange = (e) => { filtreStatut = e.target.value; afficherEleves(); };
+  // Events sur les filtres (ne re-render QUE le tbody, pas tout le squelette)
+  const searchInput = document.getElementById('el-search');
+  searchInput.addEventListener('input', (e) => {
+    recherche = e.target.value;
+    rendreTbody();
+  });
+  document.getElementById('el-classe').onchange = (e) => { filtreClasse = e.target.value; rendreTbody(); };
+  document.getElementById('el-statut').onchange = (e) => { filtreStatut = e.target.value; rendreTbody(); };
+
   if (peutModifier) {
     document.getElementById('btn-ajouter').onclick = () => ouvrirModalEleve(null);
-    document.querySelectorAll('[data-action]').forEach(btn => {
+  }
+
+  dejaRendu = true;
+  rendreTbody();
+}
+
+// Re-render UNIQUEMENT le tbody (les filtres restent intacts → pas de perte de focus)
+function rendreTbody() {
+  const user = window.EduSen.currentUser;
+  const peutModifier = user.role === 'admin' || user.role === 'gestionnaire';
+
+  let elevesVisibles = store.eleves;
+  if (user.role === 'enseignant') {
+    const cl = new Set((user.assignations || []).map(a => a.classe));
+    elevesVisibles = elevesVisibles.filter(e => cl.has(e.classe));
+  }
+
+  const motsR = recherche.toLowerCase().trim().split(/\s+/).filter(m => m);
+  const elvsFiltres = elevesVisibles.filter(e => {
+    const blob = `${e.prenom} ${e.nom} ${e.id} ${e.tuteur || ''} ${e.classe}`.toLowerCase();
+    const mR = motsR.length === 0 || motsR.every(m => blob.includes(m));
+    const mC = !filtreClasse || e.classe === filtreClasse;
+    const mS = !filtreStatut || e.statut === filtreStatut;
+    return mR && mC && mS;
+  });
+
+  const tbody = document.getElementById('el-tbody');
+  if (!tbody) return;
+
+  tbody.innerHTML = elvsFiltres.length === 0
+    ? `<tr><td colspan="5" style="padding:30px;text-align:center;color:var(--text-muted);font-style:italic">Aucun élève</td></tr>`
+    : elvsFiltres.map(e => `
+        <tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:10px 8px">
+            <div style="font-weight:600">${escapeHtml(e.prenom)} ${escapeHtml(e.nom)}</div>
+            <div style="font-size:.72rem;color:var(--text-muted)">${e.id}</div>
+          </td>
+          <td style="padding:10px 8px">${escapeHtml(e.classe)}</td>
+          <td style="padding:10px 8px">${escapeHtml(e.tuteur || '—')}</td>
+          <td style="padding:10px 8px">
+            <span style="display:inline-block;padding:3px 8px;border-radius:12px;font-size:.72rem;background:${e.statut === 'actif' ? 'var(--green-pale)' : '#fee2e2'};color:${e.statut === 'actif' ? 'var(--green-mid)' : 'var(--red-soft)'}">${e.statut}</span>
+          </td>
+          ${peutModifier ? `<td style="padding:10px 8px;text-align:right">
+            <button class="btn btn-ghost btn-sm" data-action="edit" data-id="${e.id}">✏️</button>
+            <button class="btn btn-ghost btn-sm" data-action="delete" data-id="${e.id}">🗑️</button>
+          </td>` : ''}
+        </tr>
+      `).join('');
+
+  // Mise à jour du compteur
+  const cnt = document.getElementById('el-count');
+  if (cnt) cnt.textContent = `${elvsFiltres.length} élève${elvsFiltres.length > 1 ? 's' : ''}`;
+
+  // Réattacher les events sur les boutons (tbody recréé)
+  if (peutModifier) {
+    tbody.querySelectorAll('[data-action]').forEach(btn => {
       btn.onclick = () => {
         const id = btn.dataset.id;
         if (btn.dataset.action === 'edit') ouvrirModalEleve(id);
@@ -158,7 +193,7 @@ function ouvrirModalEleve(id) {
 
     await sauvegarderEleve(eleve);
 
-    // Créer une entrée dans l'historique des paiements (Option A discutée précédemment)
+    // Créer une entrée dans l'historique des paiements
     if (!modeEdit && frais > 0) {
       store.paiementsInscription.push({
         id: 'P' + Date.now().toString(36).toUpperCase(),
@@ -177,7 +212,7 @@ function ouvrirModalEleve(id) {
     const suff = enLigne ? '' : ' (hors ligne — sera synchronisé)';
     toast(modeEdit ? `Élève modifié${suff}` : `${prenom} ${nom} inscrit(e)${suff}`, 'success');
     document.getElementById('modal-eleve').remove();
-    afficherEleves();
+    rendreTbody();  // Re-render uniquement le tableau, pas tout
   };
 }
 
@@ -187,5 +222,5 @@ async function supprimerEleveAction(id) {
   if (!confirm(`Supprimer définitivement ${e.prenom} ${e.nom} ?\n\nCette action est irréversible.`)) return;
   await supprimerEleve(id);
   toast('Élève supprimé', 'success');
-  afficherEleves();
+  rendreTbody();  // Re-render uniquement le tableau
 }
