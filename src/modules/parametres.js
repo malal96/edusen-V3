@@ -1,28 +1,21 @@
 import { store, initStore, sauvegarderEcole, sauvegarderParametres } from '../lib/store.js';
 import { trierClassesScolaire, DEFAULT_MATIERES, DEFAULT_COEFFICIENTS } from '../lib/constants.js';
-import { getAllUsers, createUser, updateUser, deleteUser, regenererCodeRecuperation } from '../lib/auth.js';
+import { getAllUsers, createUser, updateUser, deleteUser, regenererCodeRecuperation, changerMotDePasse } from '../lib/auth.js';
 import { escapeHtml, toast, formaterFCFA } from '../lib/ui.js';
 
 let matieresClasseActive = null;  // classe sélectionnée dans la gestion des matières
 
 export async function afficherParametres() {
   await initStore();
-  // Charger les utilisateurs (utile seulement pour l'admin, mais on charge quand même pour le store)
+  // Charger les utilisateurs (utile seulement pour l'admin)
   store.users = await getAllUsers();
   const user = window.EduSen.currentUser;
   const estAdmin = user.role === 'admin';
-  const estGestionnaire = user.role === 'gestionnaire';
-  const peutGererParametres = estAdmin || estGestionnaire;  // admin + gestionnaire ont accès aux paramètres généraux
   const c = document.getElementById('page-content');
 
-  if (!peutGererParametres) {
-    // Enseignant : juste son compte
-    c.innerHTML = `<div class="card"><div class="card-title">Mon compte</div>
-      <div style="margin-bottom:12px"><strong>Nom :</strong> ${escapeHtml(user.nom)}</div>
-      <div style="margin-bottom:12px"><strong>Identifiant :</strong> ${escapeHtml(user.login)}</div>
-      <div style="margin-bottom:12px"><strong>Rôle :</strong> ${escapeHtml(user.role)}</div>
-      <p style="font-size:.85rem;color:var(--text-muted);margin-top:16px">Pour changer votre mot de passe, contactez l'administrateur.</p>
-    </div>`;
+  if (!estAdmin) {
+    // Gestionnaire + Enseignant : UNIQUEMENT la page "Mon compte" avec changement de mot de passe
+    afficherMonCompte(user);
     return;
   }
 
@@ -60,8 +53,19 @@ export async function afficherParametres() {
 
       <div class="card">
         <div class="card-title">🎓 Classes</div>
-        <div style="display:flex;gap:8px;margin-bottom:14px">
-          <input id="p-classe-new" placeholder="Nom de la nouvelle classe (ex: 6ème C)" style="flex:1;padding:8px;border:1px solid var(--border);border-radius:6px"/>
+        <p style="font-size:.82rem;color:var(--text-mid);margin-bottom:14px">Lors de l'ajout d'une nouvelle classe, vous pouvez choisir une <strong>classe modèle</strong> : les matières, coefficients et mensualité seront automatiquement copiés.</p>
+        <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:end">
+          <div style="flex:1;min-width:180px">
+            <label style="display:block;font-size:.78rem;color:var(--text-muted);margin-bottom:4px">Nom de la nouvelle classe *</label>
+            <input id="p-classe-new" placeholder="Ex: 6ème C" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px"/>
+          </div>
+          <div style="flex:1;min-width:180px">
+            <label style="display:block;font-size:.78rem;color:var(--text-muted);margin-bottom:4px">Copier depuis (optionnel)</label>
+            <select id="p-classe-copier" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:#fff">
+              <option value="">— Aucune (classe vide) —</option>
+              ${store.classes.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('')}
+            </select>
+          </div>
           <button class="btn btn-primary" id="p-classe-add">+ Ajouter</button>
         </div>
         <div id="p-classes-list"></div>
@@ -189,16 +193,37 @@ export async function afficherParametres() {
 
   document.getElementById('p-classe-add').onclick = async () => {
     const nom = document.getElementById('p-classe-new').value.trim();
-    if (!nom) return;
+    const copierDe = document.getElementById('p-classe-copier').value;
+    if (!nom) { toast('Saisissez un nom de classe', 'error'); return; }
     if (store.classes.includes(nom)) { toast('Cette classe existe déjà', 'error'); return; }
+
+    // Ajouter la classe
     store.classes.push(nom);
     store.classes = trierClassesScolaire(store.classes);
-    if (!store.matieres[nom]) store.matieres[nom] = [];
-    if (!store.mensualitesClasse[nom]) store.mensualitesClasse[nom] = 20000;
+
+    if (copierDe && store.matieres[copierDe]) {
+      // Copier les matières de la classe modèle
+      store.matieres[nom] = [...store.matieres[copierDe]];
+      // Copier aussi la mensualité de la classe modèle
+      if (store.mensualitesClasse[copierDe] !== undefined) {
+        store.mensualitesClasse[nom] = store.mensualitesClasse[copierDe];
+      } else {
+        store.mensualitesClasse[nom] = 20000;
+      }
+      toast(`Classe "${nom}" créée avec les matières et la mensualité de ${copierDe}`, 'success');
+    } else {
+      // Création vide
+      store.matieres[nom] = [];
+      if (!store.mensualitesClasse[nom]) store.mensualitesClasse[nom] = 20000;
+      toast(`Classe "${nom}" créée (sans matières)`, 'success');
+    }
+
     await sauvegarderParametres();
+    // Réinitialiser les champs
     document.getElementById('p-classe-new').value = '';
-    rendreClasses();
-    toast(`Classe "${nom}" ajoutée`, 'success');
+    document.getElementById('p-classe-copier').value = '';
+    // Re-render tout pour mettre à jour les sélecteurs (incl. celui de "copier depuis")
+    afficherParametres();
   };
 
   document.getElementById('p-salle-add').onclick = async () => {
@@ -650,6 +675,104 @@ function ouvrirModalUtilisateur(id) {
       rendreUsers();
     } catch (e) {
       toast(e.message, 'error');
+    }
+  };
+}
+
+// ============================
+//  PAGE "MON COMPTE" (Gestionnaire + Enseignant)
+// ============================
+// Permet à un utilisateur non-admin de changer uniquement son mot de passe
+
+function afficherMonCompte(user) {
+  const c = document.getElementById('page-content');
+  c.innerHTML = `
+    <div class="card" style="max-width:560px">
+      <div class="card-title">👤 Mon compte</div>
+
+      <!-- Infos lecture seule -->
+      <div style="background:var(--surface2);padding:14px;border-radius:8px;margin-bottom:20px">
+        <div style="margin-bottom:8px"><strong>Nom :</strong> ${escapeHtml(user.nom)}</div>
+        <div style="margin-bottom:8px"><strong>Identifiant :</strong> ${escapeHtml(user.login)}</div>
+        <div><strong>Rôle :</strong> <span style="text-transform:capitalize">${escapeHtml(user.role)}</span></div>
+      </div>
+
+      <!-- Changement de mot de passe -->
+      <div style="padding:16px;border:1px solid var(--border);border-radius:8px">
+        <h3 style="font-family:var(--font-head);color:var(--green-deep);font-size:1.05rem;margin-bottom:14px">🔒 Changer mon mot de passe</h3>
+
+        <div id="mdp-erreur" style="display:none;background:#fee2e2;color:var(--red-soft);padding:10px 12px;border-radius:6px;font-size:.85rem;margin-bottom:12px"></div>
+        <div id="mdp-succes" style="display:none;background:#dcfce7;color:#16a34a;padding:10px 12px;border-radius:6px;font-size:.85rem;margin-bottom:12px"></div>
+
+        <div class="form-group">
+          <label>Mot de passe actuel *</label>
+          <input type="password" id="mc-ancien" autocomplete="current-password"/>
+        </div>
+        <div class="form-group">
+          <label>Nouveau mot de passe *</label>
+          <input type="password" id="mc-nouveau" autocomplete="new-password" placeholder="Au moins 6 caractères"/>
+        </div>
+        <div class="form-group">
+          <label>Confirmer le nouveau mot de passe *</label>
+          <input type="password" id="mc-confirm" autocomplete="new-password"/>
+        </div>
+        <button class="btn btn-primary" id="mc-save">💾 Changer mon mot de passe</button>
+
+        <p style="font-size:.78rem;color:var(--text-muted);margin-top:14px">
+          💡 Pour toute autre modification de votre compte (nom, rôle, etc.), veuillez contacter l'administrateur.
+        </p>
+      </div>
+    </div>
+  `;
+
+  // Event sur le bouton de changement de mot de passe
+  document.getElementById('mc-save').onclick = async () => {
+    const ancien = document.getElementById('mc-ancien').value;
+    const nouveau = document.getElementById('mc-nouveau').value;
+    const confirm = document.getElementById('mc-confirm').value;
+    const erreur = document.getElementById('mdp-erreur');
+    const succes = document.getElementById('mdp-succes');
+    erreur.style.display = 'none';
+    succes.style.display = 'none';
+
+    // Validations côté client
+    if (!ancien || !nouveau || !confirm) {
+      erreur.textContent = 'Veuillez remplir tous les champs';
+      erreur.style.display = 'block';
+      return;
+    }
+    if (nouveau.length < 6) {
+      erreur.textContent = 'Le nouveau mot de passe doit faire au moins 6 caractères';
+      erreur.style.display = 'block';
+      return;
+    }
+    if (nouveau !== confirm) {
+      erreur.textContent = 'Les deux nouveaux mots de passe ne correspondent pas';
+      erreur.style.display = 'block';
+      return;
+    }
+
+    // Appel à la fonction sécurisée qui vérifie l'ancien mdp
+    const btn = document.getElementById('mc-save');
+    btn.disabled = true;
+    btn.textContent = '⏳ Modification en cours...';
+
+    const result = await changerMotDePasse(user.id, ancien, nouveau);
+
+    btn.disabled = false;
+    btn.textContent = '💾 Changer mon mot de passe';
+
+    if (result.success) {
+      succes.textContent = '✅ Mot de passe modifié avec succès. Pensez à le retenir !';
+      succes.style.display = 'block';
+      // Vider les champs
+      document.getElementById('mc-ancien').value = '';
+      document.getElementById('mc-nouveau').value = '';
+      document.getElementById('mc-confirm').value = '';
+      toast('Mot de passe modifié', 'success');
+    } else {
+      erreur.textContent = result.error;
+      erreur.style.display = 'block';
     }
   };
 }

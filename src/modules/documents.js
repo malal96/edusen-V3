@@ -26,30 +26,60 @@ export async function afficherDocuments() {
 
       <div class="card">
         <div class="card-title">🎓 Certificat de scolarité</div>
-        <div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap">
-          <div style="flex:1;min-width:200px"><label style="display:block;font-size:.85rem;color:var(--text-mid);margin-bottom:6px">Élève</label>
-            <select id="d-eleve-cert" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px">
-              <option value="">— Choisir un élève —</option>
-              ${store.eleves.filter(e => e.statut === 'actif').map(e => `<option value="${e.id}">${escapeHtml(e.nom.toUpperCase())} ${escapeHtml(e.prenom)} — ${e.classe}</option>`).join('')}
-            </select>
+        <div style="display:grid;gap:10px">
+          <input type="text" id="d-cert-search" placeholder="🔍 Rechercher un élève par nom, prénom ou matricule..."
+            style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:6px"/>
+          <div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap">
+            <div style="flex:1;min-width:200px">
+              <label style="display:block;font-size:.85rem;color:var(--text-mid);margin-bottom:6px">Élève (<span id="d-cert-count">${store.eleves.filter(e => e.statut === 'actif').length}</span> actif${store.eleves.filter(e => e.statut === 'actif').length > 1 ? 's' : ''})</label>
+              <select id="d-eleve-cert" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px" size="1">
+                <option value="">— Choisir un élève —</option>
+                ${store.eleves.filter(e => e.statut === 'actif').map(e => `<option value="${e.id}">${escapeHtml(e.nom.toUpperCase())} ${escapeHtml(e.prenom)} — ${e.classe}</option>`).join('')}
+              </select>
+            </div>
+            <button class="btn btn-primary" id="d-print-cert">🖨️ Imprimer</button>
           </div>
-          <button class="btn btn-primary" id="d-print-cert">🖨️ Imprimer</button>
         </div>
       </div>
 
       <div class="card">
         <div class="card-title">📨 Convocations</div>
         <p style="font-size:.85rem;color:var(--text-mid);margin-bottom:14px">Générez une convocation individuelle ou collective (classe entière ou tous les parents).</p>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
-          <div class="form-group"><label>Destinataire</label>
-            <select id="conv-dest">
-              <option value="tous">Tous les parents (toutes classes)</option>
-              ${store.classes.map(c => `<option value="${c}">Classe ${c}</option>`).join('')}
-              <optgroup label="Élève individuel">
-                ${store.eleves.filter(e => e.statut === 'actif').map(e => `<option value="eleve_${e.id}">${escapeHtml(e.nom.toUpperCase())} ${escapeHtml(e.prenom)} (${e.classe})</option>`).join('')}
-              </optgroup>
+
+        <!-- Type de destinataire -->
+        <div class="form-group">
+          <label>Type de destinataire</label>
+          <select id="conv-type-dest">
+            <option value="tous">Tous les parents (toutes classes)</option>
+            <option value="classe">Une classe entière</option>
+            <option value="eleve">Un élève individuel</option>
+          </select>
+        </div>
+
+        <!-- Sélection précise (apparait selon le type) -->
+        <div id="conv-precis-classe" style="display:none" class="form-group">
+          <label>Classe</label>
+          <select id="conv-classe-sel">
+            ${store.classes.map(c => `<option value="${c}">${escapeHtml(c)}</option>`).join('')}
+          </select>
+        </div>
+
+        <div id="conv-precis-eleve" style="display:none">
+          <div class="form-group">
+            <label>Rechercher un élève</label>
+            <input type="text" id="conv-eleve-search" placeholder="🔍 Tapez un nom, prénom ou matricule..."/>
+          </div>
+          <div class="form-group">
+            <label>Élève (<span id="conv-eleve-count">${store.eleves.filter(e => e.statut === 'actif').length}</span> actif${store.eleves.filter(e => e.statut === 'actif').length > 1 ? 's' : ''})</label>
+            <select id="conv-eleve-sel">
+              <option value="">— Choisir un élève —</option>
+              ${store.eleves.filter(e => e.statut === 'actif').map(e => `<option value="${e.id}">${escapeHtml(e.nom.toUpperCase())} ${escapeHtml(e.prenom)} (${e.classe})</option>`).join('')}
             </select>
           </div>
+        </div>
+
+        <!-- Motif et date -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
           <div class="form-group"><label>Motif / Objet</label>
             <select id="conv-motif-select">
               <option value="">-- Choisir ou saisir --</option>
@@ -61,7 +91,7 @@ export async function afficherDocuments() {
               <option value="custom">Autre motif (personnalisé)...</option>
             </select>
           </div>
-          <div class="form-group" id="conv-motif-custom-group" style="display:none;grid-column:1/-1">
+          <div class="form-group" id="conv-motif-custom-group" style="display:none">
             <label>Motif personnalisé</label>
             <input type="text" id="conv-motif-custom" placeholder="Saisissez le motif..."/>
           </div>
@@ -105,7 +135,42 @@ export async function afficherDocuments() {
     imprimerCertificat(id);
   };
 
-  // ===== CONVOCATION =====
+  // ===== CERTIFICAT — Filtrage de la liste élèves par la recherche =====
+  const elevesActifs = store.eleves.filter(e => e.statut === 'actif');
+  document.getElementById('d-cert-search').addEventListener('input', (ev) => {
+    const q = ev.target.value.toLowerCase().trim();
+    const mots = q.split(/\s+/).filter(m => m);
+    const filtres = mots.length === 0 ? elevesActifs : elevesActifs.filter(e => {
+      const blob = `${e.prenom} ${e.nom} ${e.id} ${e.classe}`.toLowerCase();
+      return mots.every(m => blob.includes(m));
+    });
+    const sel = document.getElementById('d-eleve-cert');
+    sel.innerHTML = '<option value="">— Choisir un élève —</option>' +
+      filtres.map(e => `<option value="${e.id}">${escapeHtml(e.nom.toUpperCase())} ${escapeHtml(e.prenom)} — ${e.classe}</option>`).join('');
+    document.getElementById('d-cert-count').textContent = filtres.length;
+  });
+
+  // ===== CONVOCATIONS — Type de destinataire =====
+  // Affichage / masquage des sélecteurs précis selon le type choisi
+  document.getElementById('conv-type-dest').onchange = (ev) => {
+    document.getElementById('conv-precis-classe').style.display = ev.target.value === 'classe' ? 'block' : 'none';
+    document.getElementById('conv-precis-eleve').style.display = ev.target.value === 'eleve' ? 'block' : 'none';
+  };
+
+  // Filtrage de la liste d'élèves dans Convocations
+  document.getElementById('conv-eleve-search').addEventListener('input', (ev) => {
+    const q = ev.target.value.toLowerCase().trim();
+    const mots = q.split(/\s+/).filter(m => m);
+    const filtres = mots.length === 0 ? elevesActifs : elevesActifs.filter(e => {
+      const blob = `${e.prenom} ${e.nom} ${e.id} ${e.classe}`.toLowerCase();
+      return mots.every(m => blob.includes(m));
+    });
+    const sel = document.getElementById('conv-eleve-sel');
+    sel.innerHTML = '<option value="">— Choisir un élève —</option>' +
+      filtres.map(e => `<option value="${e.id}">${escapeHtml(e.nom.toUpperCase())} ${escapeHtml(e.prenom)} (${e.classe})</option>`).join('');
+    document.getElementById('conv-eleve-count').textContent = filtres.length;
+  });
+
   // Affichage / masquage du champ "motif personnalisé"
   document.getElementById('conv-motif-select').onchange = (ev) => {
     const grp = document.getElementById('conv-motif-custom-group');
@@ -113,7 +178,7 @@ export async function afficherDocuments() {
   };
 
   document.getElementById('d-print-conv').onclick = () => {
-    const dest = document.getElementById('conv-dest').value;
+    const type = document.getElementById('conv-type-dest').value;
     const motifSelect = document.getElementById('conv-motif-select').value;
     const motifCustom = document.getElementById('conv-motif-custom').value.trim();
     const motif = motifSelect === 'custom' ? motifCustom : motifSelect;
@@ -122,13 +187,17 @@ export async function afficherDocuments() {
 
     if (!motif) { toast('Veuillez choisir ou saisir un motif', 'error'); return; }
 
-    if (dest.startsWith('eleve_')) {
-      // Convocation individuelle
-      const eleveId = dest.replace('eleve_', '');
+    if (type === 'eleve') {
+      const eleveId = document.getElementById('conv-eleve-sel').value;
+      if (!eleveId) { toast('Veuillez choisir un élève', 'error'); return; }
       imprimerConvocationIndividuelle(eleveId, motif, dateConv, heureConv);
+    } else if (type === 'classe') {
+      const classe = document.getElementById('conv-classe-sel').value;
+      if (!classe) { toast('Veuillez choisir une classe', 'error'); return; }
+      imprimerConvocationsCollectives(classe, motif, dateConv, heureConv);
     } else {
-      // Convocation collective : classe ou tous
-      imprimerConvocationsCollectives(dest, motif, dateConv, heureConv);
+      // Tous les parents
+      imprimerConvocationsCollectives('tous', motif, dateConv, heureConv);
     }
   };
 

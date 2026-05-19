@@ -116,6 +116,41 @@ export async function initStore() {
     if (paiInsc) { store.paiementsInscription = paiInsc.data || []; cacheSet('paiementsInscription', store.paiementsInscription); }
     if (mensEleve) { store.mensualitesEleve = mensEleve.data || {}; cacheSet('mensualitesEleve', store.mensualitesEleve); }
 
+    // ===== MIGRATION TRIMESTRES → SEMESTRES =====
+    // Anciennes clés: eleveId__matiere__1 / __2 / __3 (trimestres)
+    // Nouvelles : eleveId__matiere__1 / __2 (semestres)
+    // Migration : si on trouve des notes en __3, on les fusionne avec __2 (moyenne) puis on supprime __3
+    if (!localStorage.getItem('edusen_migration_semestres_v1')) {
+      const cles = Object.keys(store.notes);
+      const fusionsEffectuees = new Set();
+      cles.forEach(k => {
+        const parts = k.split('__');
+        if (parts.length === 3 && parts[2] === '3') {
+          const cleS2 = `${parts[0]}__${parts[1]}__2`;
+          const noteT2 = parseFloat(store.notes[cleS2]);
+          const noteT3 = parseFloat(store.notes[k]);
+          if (!isNaN(noteT3)) {
+            if (!isNaN(noteT2)) {
+              // Moyenne T2 + T3
+              store.notes[cleS2] = Math.round(((noteT2 + noteT3) / 2) * 100) / 100;
+              fusionsEffectuees.add(`${parts[0]}__${parts[1]}`);
+            } else {
+              // Pas de note T2, on prend T3
+              store.notes[cleS2] = noteT3;
+            }
+          }
+          delete store.notes[k];
+        }
+      });
+      if (fusionsEffectuees.size > 0) {
+        console.log(`📚 Migration trimestres → semestres : ${fusionsEffectuees.size} fusion(s) effectuée(s)`);
+      }
+      cacheSet('notes', store.notes);
+      // Sauvegarder dans Firestore en arrière-plan
+      setSingleton('notes', { data: store.notes }).catch(e => console.warn('Migration sync échouée:', e.message));
+      localStorage.setItem('edusen_migration_semestres_v1', '1');
+    }
+
     console.log('✓ Store initialisé');
   } catch (err) {
     console.warn('⚠️ Chargement Firestore échoué (mode hors ligne?), utilisation du cache local', err);

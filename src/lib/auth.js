@@ -145,6 +145,29 @@ export async function regenererCodeRecuperation(id) {
   return nouveauCode;
 }
 
+/**
+ * Permet à un utilisateur de changer son propre mot de passe
+ * Vérifie d'abord l'ancien mot de passe avant le changement
+ * Retourne { success, error? }
+ */
+export async function changerMotDePasse(userId, ancienMdp, nouveauMdp) {
+  const user = await getUserById(userId);
+  if (!user) return { success: false, error: 'Utilisateur introuvable' };
+
+  // Vérifier l'ancien mot de passe
+  const ok = await verifyPassword(ancienMdp, user.motdepasseHash);
+  if (!ok) return { success: false, error: 'Mot de passe actuel incorrect' };
+
+  // Vérifier que le nouveau est différent de l'ancien
+  const meme = await verifyPassword(nouveauMdp, user.motdepasseHash);
+  if (meme) return { success: false, error: 'Le nouveau mot de passe doit être différent de l\'ancien' };
+
+  // Hasher et sauvegarder
+  const nouveauHash = await hashPassword(nouveauMdp);
+  await setOne(COLLECTION, userId, { motdepasseHash: nouveauHash });
+  return { success: true };
+}
+
 export async function deleteUser(id) {
   return deleteOne(COLLECTION, id);
 }

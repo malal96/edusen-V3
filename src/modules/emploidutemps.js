@@ -19,6 +19,49 @@ function couleurMatiere(m) {
   return COULEURS_MATIERES[m] || '#f0fdf4';
 }
 
+// Détecter si un enseignant est déjà occupé à ce créneau dans une AUTRE classe
+// Retourne le nom de la classe en conflit, ou null si libre
+function getClasseConflit(enseignant, jour, creneauId, classeActuelle) {
+  if (!enseignant) return null;
+  const key = `${jour}_${creneauId}`;
+  for (const cl of store.classes) {
+    if (cl === classeActuelle) continue;  // pas de conflit avec soi-même
+    const cell = (store.edt[cl] || {})[key];
+    if (cell && cell.enseignant === enseignant) return cl;
+  }
+  return null;
+}
+
+// Détecter si une salle est déjà occupée à ce créneau dans une AUTRE classe
+function getClasseConflitSalle(salle, jour, creneauId, classeActuelle) {
+  if (!salle) return null;
+  const key = `${jour}_${creneauId}`;
+  for (const cl of store.classes) {
+    if (cl === classeActuelle) continue;
+    const cell = (store.edt[cl] || {})[key];
+    if (cell && cell.salle === salle) return cl;
+  }
+  return null;
+}
+
+// Retourne la liste des enseignants assignés à (classe, matière) en filtrant ceux occupés ailleurs
+// On garde aussi l'enseignant actuellement sélectionné (pour qu'il reste visible)
+function getEnseignantsDisponibles(classe, matiere, jour, creneauId, enseignantActuel) {
+  const tous = getEnseignantsAssignes(classe, matiere);
+  return tous.filter(e => {
+    if (e === enseignantActuel) return true;  // on garde l'actuel
+    return !getClasseConflit(e, jour, creneauId, classe);
+  });
+}
+
+// Retourne les salles disponibles (toutes sauf celles occupées ailleurs sur ce créneau)
+function getSallesDisponibles(jour, creneauId, classeActuelle, salleActuelle) {
+  return (store.salles || []).filter(s => {
+    if (s === salleActuelle) return true;  // on garde l'actuelle
+    return !getClasseConflitSalle(s, jour, creneauId, classeActuelle);
+  });
+}
+
 // Détecter si la classe a samedi activé
 function classeASamedi(classe) {
   const edtCl = store.edt[classe] || {};
@@ -45,6 +88,18 @@ export async function afficherEDT() {
   const hasSamedi = classeASamedi(classeActuelle);
   const JOURS = hasSamedi ? JOURS_TOUS : JOURS_TOUS.slice(0, 5);  // 5 ou 6 jours
 
+  // Détecter les conflits existants dans cette classe
+  let conflitsDetectes = 0;
+  Object.entries(edtClasse).forEach(([key, cell]) => {
+    if (!cell) return;
+    const parts = key.split('_');
+    const jour = parts[0];
+    const crenId = parts.slice(1).join('_');
+    if (!JOURS.includes(jour)) return;  // on ignore les jours non affichés
+    if (cell.enseignant && getClasseConflit(cell.enseignant, jour, crenId, classeActuelle)) conflitsDetectes++;
+    if (cell.salle && getClasseConflitSalle(cell.salle, jour, crenId, classeActuelle)) conflitsDetectes++;
+  });
+
   c.innerHTML = `
     <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
       <select id="edt-classe" style="padding:7px 12px;border:1px solid var(--border);border-radius:6px;background:#fff">
@@ -54,9 +109,10 @@ export async function afficherEDT() {
       <button class="btn btn-ghost btn-sm" id="edt-imprimer">🖨️ Imprimer</button>
       ${!lectureSeule ? `<button class="btn btn-danger btn-sm" id="edt-reinit">Réinitialiser</button>` : ''}
     </div>
+    ${conflitsDetectes > 0 ? `<div style="background:#fee2e2;border-left:4px solid #e05252;padding:10px 14px;border-radius:6px;margin-bottom:14px;font-size:.85rem;color:#9a2828"><strong>⚠️ ${conflitsDetectes} conflit${conflitsDetectes > 1 ? 's' : ''} détecté${conflitsDetectes > 1 ? 's' : ''}</strong> dans cet emploi du temps. Les cases concernées sont marquées avec ⚠️ — survolez pour voir le détail.</div>` : ''}
     ${lectureSeule
       ? `<div style="background:#fef9c3;border-left:4px solid #c9933a;padding:10px 14px;border-radius:6px;margin-bottom:14px;font-size:.85rem"><strong>Mode lecture seule :</strong> vous pouvez consulter et imprimer l'emploi du temps, mais pas le modifier.</div>`
-      : `<div style="background:#e0f2fe;border-left:4px solid #2563eb;padding:10px 14px;border-radius:6px;margin-bottom:14px;font-size:.8rem"><strong>💡 Astuce :</strong> Les horaires (1ère colonne) sont communs à toutes les classes. Sélectionnez matière, enseignant et salle dans chaque case.</div>`}
+      : `<div style="background:#e0f2fe;border-left:4px solid #2563eb;padding:10px 14px;border-radius:6px;margin-bottom:14px;font-size:.8rem"><strong>💡 Astuce :</strong> Les enseignants/salles déjà occupés à un créneau dans une autre classe n'apparaissent pas dans les listes — pas de double-réservation possible !</div>`}
     <div class="card" style="overflow-x:auto">
       <table style="width:100%;border-collapse:collapse;min-width:700px">
         <thead><tr>
@@ -83,25 +139,38 @@ export async function afficherEDT() {
               const key = `${jour}_${cren.id}`;
               const cell = edtClasse[key] || {};
               const bg = couleurMatiere(cell.matiere);
+              // Détecter les conflits existants pour cette case
+              const conflitEns = cell.enseignant ? getClasseConflit(cell.enseignant, jour, cren.id, classeActuelle) : null;
+              const conflitSalle = cell.salle ? getClasseConflitSalle(cell.salle, jour, cren.id, classeActuelle) : null;
+              const aConflit = conflitEns || conflitSalle;
+              const badgeConflit = aConflit
+                ? `<span title="${conflitEns ? `⚠️ ${escapeHtml(cell.enseignant)} est aussi en ${escapeHtml(conflitEns)} à ce créneau` : ''}${conflitEns && conflitSalle ? '\n' : ''}${conflitSalle ? `⚠️ Salle ${escapeHtml(cell.salle)} est aussi utilisée par ${escapeHtml(conflitSalle)}` : ''}" style="position:absolute;top:2px;right:2px;background:#e05252;color:#fff;font-size:.7rem;padding:1px 5px;border-radius:8px;font-weight:700;line-height:1;cursor:help">⚠️</span>`
+                : '';
+
               if (lectureSeule) {
-                return `<td style="padding:6px;border:1px solid var(--border);background:${bg};font-size:.78rem">
+                return `<td style="padding:6px;border:1px solid var(--border);background:${bg};font-size:.78rem;position:relative">
+                  ${badgeConflit}
                   ${cell.matiere ? `<div style="font-weight:600">${escapeHtml(cell.matiere)}</div>` : ''}
                   ${cell.enseignant ? `<div style="font-size:.7rem;color:var(--text-muted)">${escapeHtml(cell.enseignant)}</div>` : ''}
                   ${cell.salle ? `<div style="font-size:.68rem;color:var(--text-muted)">${escapeHtml(cell.salle)}</div>` : ''}
                 </td>`;
               }
-              return `<td style="padding:4px;border:1px solid var(--border);background:${bg};vertical-align:top">
+              // Mode édition : filtrer les listes
+              const enseignantsDispo = getEnseignantsDisponibles(classeActuelle, cell.matiere, jour, cren.id, cell.enseignant);
+              const sallesDispo = getSallesDisponibles(jour, cren.id, classeActuelle, cell.salle);
+              return `<td style="padding:4px;border:1px solid var(--border);background:${bg};vertical-align:top;position:relative">
+                ${badgeConflit}
                 <select data-classe="${classeActuelle}" data-key="${key}" data-champ="matiere" style="width:100%;border:none;background:transparent;font-size:.75rem;font-weight:600;padding:2px;cursor:pointer">
                   <option value="">— Matière —</option>
                   ${matieresClasse.map(m => `<option value="${m}" ${cell.matiere === m ? 'selected' : ''}>${m}</option>`).join('')}
                 </select>
                 <select data-classe="${classeActuelle}" data-key="${key}" data-champ="enseignant" style="width:100%;border:none;background:transparent;font-size:.7rem;padding:2px;cursor:pointer" ${!cell.matiere ? 'disabled' : ''}>
                   <option value="">— Enseignant —</option>
-                  ${getEnseignantsAssignes(classeActuelle, cell.matiere).map(e => `<option value="${e}" ${cell.enseignant === e ? 'selected' : ''}>${e}</option>`).join('')}
+                  ${enseignantsDispo.map(e => `<option value="${e}" ${cell.enseignant === e ? 'selected' : ''}>${e}</option>`).join('')}
                 </select>
                 <select data-classe="${classeActuelle}" data-key="${key}" data-champ="salle" style="width:100%;border:none;background:transparent;font-size:.7rem;padding:2px;cursor:pointer">
                   <option value="">— Salle —</option>
-                  ${store.salles.map(s => `<option value="${s}" ${cell.salle === s ? 'selected' : ''}>${s}</option>`).join('')}
+                  ${sallesDispo.map(s => `<option value="${s}" ${cell.salle === s ? 'selected' : ''}>${s}</option>`).join('')}
                 </select>
               </td>`;
             }).join('')}</tr>`;

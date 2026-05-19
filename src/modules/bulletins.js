@@ -2,25 +2,28 @@ import { store, initStore, sauvegarderNotes } from '../lib/store.js';
 import { escapeHtml, toast, formaterDate } from '../lib/ui.js';
 import { LOGO_MEN_BASE64 } from '../lib/logos.js';
 
-const TRIMESTRES = ['1er Trimestre', '2ème Trimestre', '3ème Trimestre'];
+// Système BISEMESTRIEL (2 semestres)
+// 1er semestre : octobre → 15 février (jour 1 à 46 dans l'année scolaire)
+// 2ème semestre : 16 février → juillet
+const SEMESTRES = ['1er Semestre', '2ème Semestre'];
 
-function noteKey(eleveId, matiere, trimestre) {
-  return `${eleveId}__${matiere}__${trimestre}`;
+function noteKey(eleveId, matiere, semestre) {
+  return `${eleveId}__${matiere}__${semestre}`;
 }
-function getNote(eleveId, matiere, trimestre) {
-  return store.notes[noteKey(eleveId, matiere, trimestre)] ?? '';
+function getNote(eleveId, matiere, semestre) {
+  return store.notes[noteKey(eleveId, matiere, semestre)] ?? '';
 }
-function setNote(eleveId, matiere, trimestre, val) {
-  const k = noteKey(eleveId, matiere, trimestre);
+function setNote(eleveId, matiere, semestre, val) {
+  const k = noteKey(eleveId, matiere, semestre);
   if (val === '' || val === null) delete store.notes[k];
   else store.notes[k] = parseFloat(val);
 }
 
-function calculerMoyenne(eleveId, classe, trimestre) {
+function calculerMoyenne(eleveId, classe, semestre) {
   const matieres = store.matieres[classe] || [];
   let totalPoints = 0, totalCoef = 0;
   matieres.forEach(m => {
-    const note = getNote(eleveId, m, trimestre);
+    const note = getNote(eleveId, m, semestre);
     const coef = store.coefficients[m] || 1;
     if (note !== '' && !isNaN(note)) {
       totalPoints += note * coef;
@@ -40,18 +43,62 @@ function getMention(moy) {
   return { label: 'Insuffisant', color: '#e05252' };
 }
 
+// ============================
+//  ABSENCES / RETARDS PAR SEMESTRE
+// ============================
+// Détermine les dates de début et fin d'un semestre en fonction de l'année scolaire
+// 1er semestre : 1er octobre (année N) → 15 février (année N+1) inclus
+// 2ème semestre : 16 février (année N+1) → 31 juillet (année N+1)
+function getBornesSemestre(semestre) {
+  const annee = store.school?.annee || '';
+  const match = annee.match(/(\d{4}).*?(\d{4})/);
+  if (!match) return null;
+  const anneeDeb = parseInt(match[1]);  // ex: 2024
+  const anneeFin = parseInt(match[2]);  // ex: 2025
+  if (semestre === '1') {
+    // 1er octobre N → 15 février N+1
+    return {
+      debut: new Date(anneeDeb, 9, 1),       // 1er octobre
+      fin: new Date(anneeFin, 1, 15, 23, 59, 59)  // 15 février
+    };
+  }
+  // 2ème semestre : 16 février N+1 → 31 juillet N+1
+  return {
+    debut: new Date(anneeFin, 1, 16),         // 16 février
+    fin: new Date(anneeFin, 6, 31, 23, 59, 59) // 31 juillet
+  };
+}
+
+// Compte les absences et retards d'un élève sur un semestre
+function compterAssiduite(eleveId, semestre) {
+  const bornes = getBornesSemestre(semestre);
+  if (!bornes) return { absences: 0, retards: 0 };
+
+  let absences = 0, retards = 0;
+  Object.keys(store.presences || {}).forEach(k => {
+    // k = "YYYY-MM-DD__eleveId"
+    const parts = k.split('__');
+    if (parts.length !== 2 || parts[1] !== eleveId) return;
+    const date = new Date(parts[0] + 'T00:00:00');
+    if (date < bornes.debut || date > bornes.fin) return;
+    const entry = store.presences[k];
+    if (!entry || !entry.statut) return;
+    if (entry.statut === 'absent') absences++;
+    else if (entry.statut === 'retard') retards++;
+  });
+  return { absences, retards };
+}
+
+// ============================
+//  AFFICHAGE PAGE BULLETINS
+// ============================
+
 export async function afficherBulletins() {
   await initStore();
   const c = document.getElementById('page-content');
   const user = window.EduSen.currentUser;
   const estEnseignant = user.role === 'enseignant';
   const estGestionnaire = user.role === 'gestionnaire';
-  const lectureSeule = estEnseignant || estGestionnaire ? false : false;  // sera redéfini ci-dessous
-
-  // Permissions :
-  // - admin : tout (saisie + impression)
-  // - enseignant : saisie uniquement sur ses matières
-  // - gestionnaire : lecture seule (peut imprimer mais pas saisir)
   const peutSaisir = user.role === 'admin' || user.role === 'enseignant';
 
   // Classes visibles
@@ -63,7 +110,7 @@ export async function afficherBulletins() {
   if (classes.length === 0) { c.innerHTML = `<div class="card">Aucune classe assignée.</div>`; return; }
 
   const classeActuelle = document.getElementById('b-classe')?.value || classes[0];
-  const trimestre = document.getElementById('b-trim')?.value || '1';
+  const semestre = document.getElementById('b-sem')?.value || '1';
 
   // Matières visibles (pour l'enseignant : seulement les siennes)
   let matieres = store.matieres[classeActuelle] || [];
@@ -79,8 +126,8 @@ export async function afficherBulletins() {
       <select id="b-classe" style="padding:7px 12px;border:1px solid var(--border);border-radius:6px;background:#fff">
         ${classes.map(cl => `<option value="${cl}" ${cl === classeActuelle ? 'selected' : ''}>${cl}</option>`).join('')}
       </select>
-      <select id="b-trim" style="padding:7px 12px;border:1px solid var(--border);border-radius:6px;background:#fff">
-        ${TRIMESTRES.map((t, i) => `<option value="${i+1}" ${(i+1) == trimestre ? 'selected' : ''}>${t}</option>`).join('')}
+      <select id="b-sem" style="padding:7px 12px;border:1px solid var(--border);border-radius:6px;background:#fff">
+        ${SEMESTRES.map((t, i) => `<option value="${i+1}" ${(i+1) == semestre ? 'selected' : ''}>${t}</option>`).join('')}
       </select>
       ${peutSaisir ? `<button class="btn btn-primary btn-sm" id="b-save">💾 Enregistrer les notes</button>` : ''}
     </div>
@@ -96,14 +143,14 @@ export async function afficherBulletins() {
         </tr></thead>
         <tbody>
           ${eleves.map(e => {
-            const moy = !estEnseignant ? calculerMoyenne(e.id, classeActuelle, trimestre) : null;
+            const moy = !estEnseignant ? calculerMoyenne(e.id, classeActuelle, semestre) : null;
             const m = moy !== null ? getMention(moy) : null;
             return `<tr style="border-bottom:1px solid var(--border)">
               <td style="padding:8px"><strong>${escapeHtml(e.prenom)} ${escapeHtml(e.nom)}</strong><br><small style="color:var(--text-muted)">${e.id}</small></td>
               ${matieres.map(mat => `<td style="padding:5px;text-align:center">
                 ${peutSaisir
-                  ? `<input type="number" min="0" max="20" step="0.25" data-eleve="${e.id}" data-mat="${mat}" value="${getNote(e.id, mat, trimestre)}" style="width:60px;padding:5px;text-align:center;border:1px solid var(--border);border-radius:4px"/>`
-                  : `<span style="display:inline-block;min-width:40px;padding:4px 8px;background:var(--surface2);border-radius:4px;font-weight:600;color:${getNote(e.id, mat, trimestre) !== '' ? 'var(--text)' : 'var(--text-muted)'}">${getNote(e.id, mat, trimestre) !== '' ? getNote(e.id, mat, trimestre) : '—'}</span>`
+                  ? `<input type="number" min="0" max="20" step="0.25" data-eleve="${e.id}" data-mat="${mat}" value="${getNote(e.id, mat, semestre)}" style="width:60px;padding:5px;text-align:center;border:1px solid var(--border);border-radius:4px"/>`
+                  : `<span style="display:inline-block;min-width:40px;padding:4px 8px;background:var(--surface2);border-radius:4px;font-weight:600;color:${getNote(e.id, mat, semestre) !== '' ? 'var(--text)' : 'var(--text-muted)'}">${getNote(e.id, mat, semestre) !== '' ? getNote(e.id, mat, semestre) : '—'}</span>`
                 }
               </td>`).join('')}
               ${!estEnseignant ? `<td style="padding:8px;text-align:center;font-weight:700">${moy !== null ? moy.toFixed(2) : '—'}</td>
@@ -117,11 +164,11 @@ export async function afficherBulletins() {
   `;
 
   document.getElementById('b-classe').onchange = afficherBulletins;
-  document.getElementById('b-trim').onchange = afficherBulletins;
+  document.getElementById('b-sem').onchange = afficherBulletins;
   if (peutSaisir) {
     document.getElementById('b-save').onclick = async () => {
       document.querySelectorAll('input[data-eleve]').forEach(inp => {
-        setNote(inp.dataset.eleve, inp.dataset.mat, trimestre, inp.value);
+        setNote(inp.dataset.eleve, inp.dataset.mat, semestre, inp.value);
       });
       await sauvegarderNotes();
       toast('Notes enregistrées', 'success');
@@ -130,20 +177,25 @@ export async function afficherBulletins() {
   }
   if (!estEnseignant) {
     document.querySelectorAll('[data-print]').forEach(b => {
-      b.onclick = () => imprimerBulletin(b.dataset.print, trimestre);
+      b.onclick = () => imprimerBulletin(b.dataset.print, semestre);
     });
   }
 }
 
-function imprimerBulletin(eleveId, trimestre) {
+// ============================
+//  IMPRESSION D'UN BULLETIN
+// ============================
+
+function imprimerBulletin(eleveId, semestre) {
   const e = store.eleves.find(x => x.id === eleveId);
   if (!e) return;
   const matieres = store.matieres[e.classe] || [];
-  const moy = calculerMoyenne(eleveId, e.classe, trimestre);
+  const moy = calculerMoyenne(eleveId, e.classe, semestre);
   const mention = moy !== null ? getMention(moy) : null;
   const s = store.school;
   const iefAffiche = (s.ief || '').trim() || 'IEF / IA : —';
   const logo2 = s.logo2 || '';
+  const { absences, retards } = compterAssiduite(eleveId, semestre);
 
   const logo2Html = logo2
     ? `<img src="${logo2}" alt="Logo école" style="max-width:65px;max-height:55px;object-fit:contain"/>`
@@ -169,8 +221,8 @@ function imprimerBulletin(eleveId, trimestre) {
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:10px 14px;border:1px solid #dde5d9;border-radius:8px;background:#f9fdf9">
       <div style="display:flex;align-items:center;gap:6px;width:180px;flex-shrink:0">
         <img src="${LOGO_MEN_BASE64}" alt="MEN" style="width:55px;height:auto;object-fit:contain;flex-shrink:0"/>
-        <div style="font-size:7px;font-weight:700;line-height:1.4;color:#000;text-transform:uppercase;white-space:nowrap">
-          <div>MINISTERE DE L'EDUCATION NATIONALE</div>
+        <div style="font-size:7px;font-weight:700;line-height:1.4;color:#000;text-transform:uppercase">
+          <div>MINISTERE DE L'EDUCATION<br/>NATIONALE</div>
           <div style="margin-top:3px">${escapeHtml(iefAffiche)}</div>
         </div>
       </div>
@@ -184,7 +236,7 @@ function imprimerBulletin(eleveId, trimestre) {
 
     <!-- Titre du bulletin -->
     <div style="background:#1a4731;color:#fff;padding:8px;text-align:center;border-radius:4px;margin-bottom:12px">
-      <strong>BULLETIN DE NOTES</strong><br><small>${TRIMESTRES[trimestre-1]}</small>
+      <strong>BULLETIN DE NOTES</strong><br><small>${SEMESTRES[semestre-1]}</small>
     </div>
 
     <!-- Infos élève -->
@@ -199,7 +251,7 @@ function imprimerBulletin(eleveId, trimestre) {
       <thead><tr><th>Matière</th><th>Coef.</th><th>Note /20</th><th>Points</th></tr></thead>
       <tbody>
         ${matieres.map(m => {
-          const note = getNote(eleveId, m, trimestre);
+          const note = getNote(eleveId, m, semestre);
           const coef = store.coefficients[m] || 1;
           const points = note !== '' ? note * coef : '';
           return `<tr><td>${m}</td><td style="text-align:center">${coef}</td><td style="text-align:center">${note !== '' ? note : '—'}</td><td style="text-align:center">${points !== '' ? points.toFixed(2) : '—'}</td></tr>`;
@@ -207,6 +259,14 @@ function imprimerBulletin(eleveId, trimestre) {
         <tr style="font-weight:700;background:#e8f5ee"><td colspan="2">MOYENNE GÉNÉRALE</td><td style="text-align:center">${moy !== null ? moy.toFixed(2) + '/20' : '—'}</td><td style="text-align:center">${mention ? mention.label : '—'}</td></tr>
       </tbody>
     </table>
+
+    <!-- Encart Assiduité (entre tableau et signatures) -->
+    <div style="margin-top:14px;padding:10px 14px;border:1px solid #dde5d9;border-radius:6px;background:#f9fdf9;display:flex;gap:24px;justify-content:center;flex-wrap:wrap">
+      <div style="font-size:13px"><strong>📋 Assiduité :</strong></div>
+      <div style="font-size:13px;color:${absences > 0 ? '#e05252' : '#666'}"><strong>Absences :</strong> ${absences} ${absences > 1 ? 'jours' : 'jour'}</div>
+      <div style="font-size:13px;color:${retards > 0 ? '#c9933a' : '#666'}"><strong>Retards :</strong> ${retards} ${retards > 1 ? 'fois' : 'fois'}</div>
+    </div>
+
     <div style="margin-top:30px;display:flex;justify-content:space-around;font-size:11px;color:#666">
       <div>Signature Directeur : _______________<br><br>${escapeHtml(s.directeur || '')}</div>
       <div>Signature Tuteur : _______________</div>
