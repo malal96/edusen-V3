@@ -232,12 +232,23 @@ export async function afficherDocuments() {
 
 function entete(titre) {
   const s = store.school;
+  const logo2 = s.logo2 || '';
+  // Logo 2 à gauche (80×80 max) ou placeholder en pointillés si absent
+  const logoHtml = logo2
+    ? `<img src="${logo2}" alt="Logo école" style="max-width:80px;max-height:80px;object-fit:contain"/>`
+    : `<div style="width:80px;height:80px;border:1px dashed #ccc;display:flex;align-items:center;justify-content:center;font-size:10px;color:#aaa;text-align:center;border-radius:6px">Logo</div>`;
+
   return `
     <div style="text-align:center;margin-bottom:12px;font-size:12px;font-weight:600">RÉPUBLIQUE DU SÉNÉGAL</div>
-    <div style="text-align:center;margin-bottom:16px;padding:10px;border:1px solid #dde5d9;border-radius:8px">
-      <div style="font-size:15px;font-weight:700;color:#1a4731">${escapeHtml(s.nom)}</div>
-      <div style="font-size:11px;color:#666">${escapeHtml(s.ville || '')} · Tél: ${escapeHtml(s.telephone || '')}</div>
-      <div style="font-size:11px;color:#666">Année scolaire ${escapeHtml(s.annee || '')}</div>
+    <div style="display:flex;align-items:center;gap:14px;margin-bottom:16px;padding:12px 14px;border:1px solid #dde5d9;border-radius:8px">
+      <div style="width:80px;flex-shrink:0;display:flex;align-items:center;justify-content:center">${logoHtml}</div>
+      <div style="flex:1;text-align:center;min-width:0">
+        <div style="font-size:15px;font-weight:700;color:#1a4731">${escapeHtml(s.nom)}</div>
+        <div style="font-size:11px;color:#666;margin-top:2px">${escapeHtml(s.ville || '')} · Tél: ${escapeHtml(s.telephone || '')}</div>
+        <div style="font-size:11px;color:#666;margin-top:2px">Année scolaire ${escapeHtml(s.annee || '')}</div>
+      </div>
+      <!-- Espace équivalent à droite pour bien centrer les infos école -->
+      <div style="width:80px;flex-shrink:0"></div>
     </div>
     <h2 style="text-align:center;background:#1a4731;color:#fff;padding:8px;border-radius:4px;margin-bottom:16px;font-size:15px">${titre}</h2>`;
 }
