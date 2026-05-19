@@ -2,6 +2,7 @@
 // Importe Firebase, gère l'auth et lance l'interface
 
 import './styles/main.css';
+import { registerSW } from 'virtual:pwa-register';
 import { initialiserAdminParDefaut, getCurrentSession, getCurrentUser, login, logout } from './lib/auth.js';
 import { onStatusChange, getCurrentStatus } from './lib/sync.js';
 import { afficherEcranLogin } from './modules/login.js';
@@ -13,6 +14,50 @@ window.EduSen = {
   currentUser: null,
   onlineStatus: 'online'
 };
+
+// ========================================
+//  DÉTECTION DES MISES À JOUR PWA (Option B)
+// ========================================
+// Quand une nouvelle version de l'app est déployée, on affiche une bannière
+// "Nouvelle version disponible" avec un bouton "Mettre à jour"
+
+const updateSW = registerSW({
+  onNeedRefresh() {
+    afficherBanniereUpdate();
+  },
+  onOfflineReady() {
+    console.log('✓ Application prête à fonctionner hors ligne');
+  }
+});
+
+function afficherBanniereUpdate() {
+  // Éviter les doublons
+  if (document.getElementById('update-banner')) return;
+  const banner = document.createElement('div');
+  banner.id = 'update-banner';
+  banner.className = 'update-banner';
+  banner.innerHTML = `
+    <div class="update-banner-content">
+      <span style="font-size:1.2rem">🔄</span>
+      <span>Une nouvelle version d'EduSen est disponible</span>
+      <button id="btn-update-now" class="btn-update-now">Mettre à jour</button>
+      <button id="btn-update-later" class="btn-update-later" aria-label="Plus tard">×</button>
+    </div>
+  `;
+  document.body.appendChild(banner);
+  // Animation d'entrée
+  setTimeout(() => banner.classList.add('show'), 100);
+
+  document.getElementById('btn-update-now').onclick = async () => {
+    document.getElementById('btn-update-now').textContent = '⏳ Mise à jour...';
+    document.getElementById('btn-update-now').disabled = true;
+    await updateSW(true);  // true = force reload
+  };
+  document.getElementById('btn-update-later').onclick = () => {
+    banner.classList.remove('show');
+    setTimeout(() => banner.remove(), 300);
+  };
+}
 
 // ========================================
 //  POINT D'ENTRÉE

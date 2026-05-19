@@ -1,8 +1,14 @@
 import { store, initStore } from '../lib/store.js';
 import { escapeHtml, toast, formaterDate } from '../lib/ui.js';
+import { getAllUsers } from '../lib/auth.js';
 
 export async function afficherDocuments() {
   await initStore();
+  // Charger explicitement les utilisateurs (nécessaire pour la liste des tuteurs dans Attestation de stage)
+  // Sinon, store.users peut être vide si on arrive sur Documents sans passer par Paramètres
+  if (!store.users || store.users.length === 0) {
+    store.users = await getAllUsers();
+  }
   const c = document.getElementById('page-content');
 
   // Liste unique de toutes les matières de l'école

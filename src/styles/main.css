@@ -330,6 +330,74 @@ input, select, textarea { font-family: inherit; }
 .topbar-meta { display: flex; align-items: center; gap: 12px; }
 
 /* ========================================
+   BANNIÈRE DE MISE À JOUR PWA
+   ======================================== */
+.update-banner {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: var(--green-deep);
+  color: #fff;
+  padding: 14px 20px;
+  z-index: 10001;
+  box-shadow: 0 -4px 16px rgba(0,0,0,0.15);
+  transform: translateY(100%);
+  transition: transform 0.4s ease-out;
+}
+.update-banner.show {
+  transform: translateY(0);
+}
+.update-banner-content {
+  max-width: 600px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 0.92rem;
+}
+.update-banner-content > span:nth-child(2) {
+  flex: 1;
+  min-width: 200px;
+}
+.btn-update-now {
+  background: var(--gold);
+  color: #fff;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 0.88rem;
+  transition: background 0.2s;
+}
+.btn-update-now:hover:not(:disabled) {
+  background: #b07d28;
+}
+.btn-update-now:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+.btn-update-later {
+  background: transparent;
+  color: rgba(255,255,255,0.7);
+  border: none;
+  font-size: 1.4rem;
+  cursor: pointer;
+  padding: 0 8px;
+  line-height: 1;
+}
+.btn-update-later:hover {
+  color: #fff;
+}
+@media (max-width: 480px) {
+  .update-banner-content {
+    font-size: 0.85rem;
+  }
+}
+
+/* ========================================
    BOUTON HAMBURGER (mobile uniquement)
    ======================================== */
 .btn-burger {
