@@ -74,7 +74,10 @@ export const DEFAULT_CRENEAUX = [
   { id: 'c5', debut: '11:00', fin: '12:00', type: 'cours' },
   { id: 'c6', debut: '12:00', fin: '14:00', type: 'repas' },
   { id: 'c7', debut: '14:00', fin: '15:00', type: 'cours' },
-  { id: 'c8', debut: '15:00', fin: '16:00', type: 'cours' }
+  { id: 'c8', debut: '15:00', fin: '16:00', type: 'cours' },
+  { id: 'c9', debut: '16:00', fin: '16:15', type: 'pause' },
+  { id: 'c10', debut: '16:15', fin: '17:15', type: 'cours' },
+  { id: 'c11', debut: '17:15', fin: '18:15', type: 'cours' }
 ];
 
 // Tri scolaire 6ème → Terminale

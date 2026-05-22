@@ -151,6 +151,41 @@ export async function initStore() {
       localStorage.setItem('edusen_migration_semestres_v1', '1');
     }
 
+    // ===== MIGRATION CRENEAUX : ajout 3 créneaux fin de journée =====
+    // Récréation 16:00-16:15 + Cours 16:15-17:15 + Cours 17:15-18:15
+    // Ajoutés UNE SEULE FOIS, sans toucher aux créneaux existants
+    if (!localStorage.getItem('edusen_migration_creneaux_extension_v1')) {
+      const cren = store.creneaux || [];
+      const idsExistants = new Set(cren.map(c => c.id));
+      const nouveaux = [
+        { id: 'c9', debut: '16:00', fin: '16:15', type: 'pause' },
+        { id: 'c10', debut: '16:15', fin: '17:15', type: 'cours' },
+        { id: 'c11', debut: '17:15', fin: '18:15', type: 'cours' }
+      ];
+      let ajouts = 0;
+      nouveaux.forEach(nv => {
+        if (!idsExistants.has(nv.id)) {
+          cren.push(nv);
+          ajouts++;
+        }
+      });
+      if (ajouts > 0) {
+        store.creneaux = cren;
+        console.log(`📅 Extension EDT : ${ajouts} nouveau(x) créneau(x) ajouté(s) (récréation + 2 cours)`);
+        // Sauvegarder dans Firestore en arrière-plan
+        setSingleton('parametres', {
+          classes: store.classes,
+          matieres: store.matieres,
+          coefficients: store.coefficients,
+          mensualitesClasse: store.mensualitesClasse,
+          salles: store.salles,
+          creneaux: store.creneaux
+        }).catch(e => console.warn('Sync extension créneaux échouée:', e.message));
+        cacheSet('parametres', { creneaux: store.creneaux });
+      }
+      localStorage.setItem('edusen_migration_creneaux_extension_v1', '1');
+    }
+
     console.log('✓ Store initialisé');
   } catch (err) {
     console.warn('⚠️ Chargement Firestore échoué (mode hors ligne?), utilisation du cache local', err);
