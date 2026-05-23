@@ -17,7 +17,7 @@ const ONGLETS = {
   eleves:        { label: 'Élèves',          icon: '👨‍🎓', render: afficherEleves,    roles: ['admin','gestionnaire','enseignant'] },
   bulletins:     { label: 'Bulletins',       icon: '📝', render: afficherBulletins, roles: ['admin','gestionnaire','enseignant'] },
   emploidutemps: { label: 'Emploi du temps', icon: '📅', render: afficherEDT,       roles: ['admin','gestionnaire','enseignant'] },
-  presences:     { label: 'Présences',       icon: '✅', render: afficherPresences, roles: ['admin','enseignant'] },
+  presences:     { label: 'Présences',       icon: '✅', render: afficherPresences, roles: ['admin','gestionnaire','enseignant'] },
   facturation:   { label: 'Facturation',     icon: '💰', render: afficherFacturation, roles: ['admin','gestionnaire'] },
   documents:     { label: 'Documents',       icon: '📄', render: afficherDocuments,  roles: ['admin','gestionnaire'] },
   parametres:    { label: 'Paramètres',      icon: '⚙️', render: afficherParametres, roles: ['admin','gestionnaire','enseignant'] }
