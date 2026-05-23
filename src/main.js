@@ -21,9 +21,25 @@ window.EduSen = {
 // Quand une nouvelle version de l'app est déployée, on affiche une bannière
 // "Nouvelle version disponible" avec un bouton "Mettre à jour"
 
-// Référence vers le registration du Service Worker (récupérée à l'enregistrement)
-// Permet d'accéder au SW "waiting" pour lui envoyer un message SKIP_WAITING
+// Référence vers le registration du Service Worker
 let swRegistration = null;
+
+// Écouteur GLOBAL de controllerchange — installé dès le démarrage de l'app
+// pour ne JAMAIS rater l'événement (qui peut arriver très vite après skipWaiting).
+// Quand l'overlay s'affichera, il consultera juste ces variables.
+let controllerChangeRecu = false;
+let onControllerChangeOverlay = null;  // callback à appeler quand l'overlay est ouvert
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    console.log('✅ [PWA] controllerchange reçu');
+    controllerChangeRecu = true;
+    // Si l'overlay est ouvert et attend ce signal, on le notifie
+    if (typeof onControllerChangeOverlay === 'function') {
+      onControllerChangeOverlay();
+    }
+  });
+}
 
 const updateSW = registerSW({
   onNeedRefresh() {
@@ -34,9 +50,21 @@ const updateSW = registerSW({
     console.log('✓ Application prête à fonctionner hors ligne');
   },
   onRegisteredSW(swUrl, registration) {
-    // Sauvegarde la registration pour pouvoir accéder à registration.waiting plus tard
     swRegistration = registration;
     console.log('✓ [PWA] Service Worker enregistré');
+
+    // Suit les transitions d'état du SW en attente (pour les logs et le fallback)
+    if (registration) {
+      registration.addEventListener('updatefound', () => {
+        const newSW = registration.installing;
+        console.log('🔄 [PWA] updatefound — nouvelle installation');
+        if (newSW) {
+          newSW.addEventListener('statechange', () => {
+            console.log(`📊 [PWA] État SW : ${newSW.state}`);
+          });
+        }
+      });
+    }
   }
 });
 
@@ -55,12 +83,10 @@ function afficherBanniereUpdate() {
     </div>
   `;
   document.body.appendChild(banner);
-  // Animation d'entrée
   setTimeout(() => banner.classList.add('show'), 100);
 
   document.getElementById('btn-update-now').onclick = () => {
     console.log('🔄 [PWA] Bouton "Mettre à jour" cliqué');
-    // Affiche l'overlay et déclenche réellement la mise à jour
     afficherOverlayMiseAJour();
   };
   document.getElementById('btn-update-later').onclick = () => {
@@ -70,32 +96,24 @@ function afficherBanniereUpdate() {
 }
 
 /**
- * Affiche un overlay plein écran avec barre de progression synchronisée
- * avec le VRAI cycle de vie du Service Worker.
+ * Affiche un overlay de progression et orchestre la mise à jour PWA.
  *
- * Stratégie correcte pour registerType: 'prompt' :
- *  1. Quand onNeedRefresh est déclenché, le nouveau SW est déjà installé
- *     et se trouve en état "waiting" (registration.waiting).
- *  2. On bloque le rechargement automatique de vite-plugin-pwa en
- *     interceptant 'controllerchange' AVANT que le SW prenne le contrôle.
- *  3. On envoie un message SKIP_WAITING au SW en attente → il s'active.
- *  4. L'événement 'controllerchange' se déclenche → on finit la barre à 100%
- *     puis on recharge MANUELLEMENT la page.
+ * Stratégie finale :
+ *  1. Phase A (0% → 50%) : animation rapide pendant l'envoi de SKIP_WAITING
+ *  2. Phase B (50% → 90%) : polling sur registration.active.scriptURL
+ *     pour détecter quand le nouveau SW a vraiment pris le contrôle.
+ *     On guette aussi controllerchange en parallèle (double sécurité).
+ *  3. Phase C (90% → 100%) : reload contrôlé une fois le nouveau SW actif.
  *
- *  - Phase 1 (0% → 70%) : pendant l'activation du nouveau SW
- *  - Phase 2 (70% → 95%) : controllerchange reçu = nouveau SW actif ✅
- *  - Phase 3 (95% → 100%) : reload contrôlé
- *  - Sécurité : reload forcé après 30s si rien ne se passe
+ *  CLEFS : on n'écoute PAS controllerchange ici (déjà fait globalement),
+ *  on lit juste la variable controllerChangeRecu et on observe activement
+ *  l'état de la registration.
  */
 function afficherOverlayMiseAJour() {
-  // Masque la bannière
   const banner = document.getElementById('update-banner');
   if (banner) banner.classList.remove('show');
-
-  // Évite les doublons
   if (document.getElementById('update-overlay')) return;
 
-  // Crée l'overlay
   const overlay = document.createElement('div');
   overlay.id = 'update-overlay';
   overlay.className = 'update-overlay';
@@ -124,8 +142,10 @@ function afficherOverlayMiseAJour() {
   const step = document.getElementById('update-overlay-step');
 
   let progress = 0;
-  let controllerChanged = false;
+  let swActive = false;        // Devient true quand le nouveau SW est confirmé actif
   let reloadDeja = false;
+  let intervalPhase1 = null;
+  let intervalPhase2 = null;
 
   function setProgress(val, message) {
     progress = val;
@@ -139,75 +159,96 @@ function afficherOverlayMiseAJour() {
     if (reloadDeja) return;
     reloadDeja = true;
     console.log(`🔄 [PWA] Reload final (${raison})`);
+    if (intervalPhase1) clearInterval(intervalPhase1);
+    if (intervalPhase2) clearInterval(intervalPhase2);
     setProgress(100, 'Redémarrage de l\'application...');
     setTimeout(() => window.location.reload(), 400);
   }
 
-  // ===== ÉTAPE A : écouter 'controllerchange' AVANT de déclencher la mise à jour =====
-  // Cet événement = le nouveau SW vient de prendre le contrôle de la page.
-  // C'est LE signal fiable que la mise à jour est réellement appliquée.
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (controllerChanged) return;
-      controllerChanged = true;
-      console.log('✅ [PWA] controllerchange reçu — nouveau SW actif');
+  // ===== Fonction appelée quand le nouveau SW est CONFIRMÉ actif =====
+  function passerEnPhaseFinale(raison) {
+    if (swActive || reloadDeja) return;
+    swActive = true;
+    console.log(`✅ [PWA] SW confirmé actif (${raison})`);
 
-      // Phase 2 : animation rapide vers 95%
-      clearInterval(interval);
-      const startProgress = progress;
-      const phase2Start = Date.now();
-      const phase2Duration = 800;
+    if (intervalPhase1) clearInterval(intervalPhase1);
 
-      const phase2Interval = setInterval(() => {
-        const elapsed = Date.now() - phase2Start;
-        if (elapsed >= phase2Duration) {
-          clearInterval(phase2Interval);
-          setProgress(95, 'Finalisation...');
-          setTimeout(() => effectuerReloadFinal('controllerchange'), 300);
-        } else {
-          const ratio = elapsed / phase2Duration;
-          setProgress(startProgress + (95 - startProgress) * ratio, 'Finalisation...');
-        }
-      }, 30);
-    });
+    // Animation rapide de la position actuelle vers 95%
+    const startProgress = progress;
+    const phase2Start = Date.now();
+    const phase2Duration = 800;
+
+    intervalPhase2 = setInterval(() => {
+      const elapsed = Date.now() - phase2Start;
+      if (elapsed >= phase2Duration) {
+        clearInterval(intervalPhase2);
+        setProgress(95, 'Finalisation...');
+        setTimeout(() => effectuerReloadFinal(raison), 300);
+      } else {
+        const ratio = elapsed / phase2Duration;
+        setProgress(startProgress + (95 - startProgress) * ratio, 'Finalisation...');
+      }
+    }, 30);
   }
 
-  // ===== PHASE 1 : progression simulée pendant l'activation du SW =====
+  // ===== Branchement sur l'écouteur global controllerchange =====
+  // Si l'événement est DÉJÀ arrivé avant l'ouverture de l'overlay → on enchaîne tout de suite
+  if (controllerChangeRecu) {
+    console.log('ℹ️ [PWA] controllerchange déjà reçu avant l\'overlay');
+    setProgress(50, 'Application des modifications...');
+    setTimeout(() => passerEnPhaseFinale('controllerchange déjà reçu'), 300);
+    return;
+  }
+  // Sinon, on s'abonne pour être notifié quand il arrivera
+  onControllerChangeOverlay = () => passerEnPhaseFinale('controllerchange');
+
+  // ===== PHASE 1 : animation pendant l'activation du SW =====
+  // On monte doucement jusqu'à 85% maximum, en attendant un des signaux.
+  // Plus généreux que 70% car parfois le SW met du temps mais finit par bien s'activer.
   const phase1Start = Date.now();
-  const interval = setInterval(() => {
-    if (controllerChanged) return;
+  intervalPhase1 = setInterval(() => {
+    if (swActive || reloadDeja) return;
     const elapsed = Date.now() - phase1Start;
     if (elapsed < 1500) {
       setProgress((elapsed / 1500) * 40, 'Téléchargement de la nouvelle version...');
     } else if (elapsed < 3500) {
       setProgress(40 + ((elapsed - 1500) / 2000) * 25, 'Installation des nouveaux fichiers...');
+    } else if (elapsed < 6000) {
+      setProgress(65 + ((elapsed - 3500) / 2500) * 15, 'Application des modifications...');
     } else {
-      setProgress(Math.min(70, progress + 0.1), 'Application des modifications...');
+      // Plafond à 85% — on attend le vrai signal
+      setProgress(Math.min(85, progress + 0.05), 'Activation de la nouvelle version...');
     }
   }, 80);
 
-  // ===== ÉTAPE B : déclencher l'activation du SW en attente =====
-  // On envoie un message SKIP_WAITING directement au SW "waiting" si on le trouve.
-  // En parallèle, on appelle updateSW() qui fait la même chose côté vite-plugin-pwa.
+  // ===== DÉCLENCHER L'ACTIVATION DU SW EN ATTENTE =====
+  // On envoie SKIP_WAITING au SW waiting → il devient actif → controllerchange se déclenche
   setTimeout(async () => {
     try {
-      // Tentative 1 : envoyer SKIP_WAITING directement au SW waiting
+      let swEnvoye = false;
+
+      // Tentative 1 : registration mémorisée
       if (swRegistration && swRegistration.waiting) {
         console.log('📤 [PWA] Envoi de SKIP_WAITING au SW en attente');
         swRegistration.waiting.postMessage({ type: 'SKIP_WAITING' });
-      } else if ('serviceWorker' in navigator) {
-        // Fallback : récupère la registration actuelle si swRegistration n'est pas dispo
+        swEnvoye = true;
+      }
+
+      // Tentative 2 : récupération fraîche de la registration
+      if (!swEnvoye && 'serviceWorker' in navigator) {
         const reg = await navigator.serviceWorker.getRegistration();
         if (reg && reg.waiting) {
           console.log('📤 [PWA] Envoi de SKIP_WAITING (via getRegistration)');
           reg.waiting.postMessage({ type: 'SKIP_WAITING' });
-        } else {
-          console.warn('⚠️ [PWA] Aucun SW en attente trouvé');
+          swEnvoye = true;
         }
       }
 
-      // Tentative 2 : utiliser l'API de vite-plugin-pwa (déclenche aussi skipWaiting en interne)
-      // On utilise updateSW(true) mais on a déjà notre propre gestionnaire de reload via controllerchange
+      if (!swEnvoye) {
+        console.warn('⚠️ [PWA] Aucun SW en attente trouvé, tentative via updateSW()');
+      }
+
+      // Tentative 3 : appeler updateSW de vite-plugin-pwa qui fera son propre skipWaiting
       console.log('📤 [PWA] Appel de updateSW()');
       updateSW(true);
     } catch (err) {
@@ -215,14 +256,53 @@ function afficherOverlayMiseAJour() {
     }
   }, 200);
 
-  // ===== SÉCURITÉ : si controllerchange ne se déclenche pas en 30s, reload forcé =====
-  setTimeout(() => {
-    if (!controllerChanged && !reloadDeja) {
-      console.warn('⚠️ [PWA] Timeout 30s — reload forcé');
-      clearInterval(interval);
-      effectuerReloadFinal('timeout 30s');
+  // ===== POLLING DE SÉCURITÉ : surveille l'état réel du SW =====
+  // Toutes les 500ms on vérifie si le contrôleur a changé OU si registration.waiting
+  // a disparu (= le SW en attente est devenu actif).
+  let urlControleurInitial = null;
+  if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+    urlControleurInitial = navigator.serviceWorker.controller.scriptURL;
+  }
+
+  const pollInterval = setInterval(async () => {
+    if (swActive || reloadDeja) {
+      clearInterval(pollInterval);
+      return;
     }
-  }, 30000);
+    try {
+      if ('serviceWorker' in navigator) {
+        // Vérif 1 : le controller a changé d'URL ?
+        const ctrl = navigator.serviceWorker.controller;
+        if (ctrl && urlControleurInitial && ctrl.scriptURL !== urlControleurInitial) {
+          clearInterval(pollInterval);
+          passerEnPhaseFinale('polling: controller URL change');
+          return;
+        }
+        // Vérif 2 : plus de SW en attente (= il est devenu actif)
+        const reg = await navigator.serviceWorker.getRegistration();
+        if (reg && !reg.waiting && reg.active) {
+          // S'il y avait un waiting au départ et qu'il n'y en a plus, c'est bon signe
+          if (swRegistration && swRegistration.waiting === reg.active) {
+            clearInterval(pollInterval);
+            passerEnPhaseFinale('polling: waiting devenu active');
+            return;
+          }
+        }
+      }
+    } catch (err) {
+      // Ignore, on continue à poller
+    }
+  }, 500);
+
+  // ===== SÉCURITÉ FINALE : si rien après 20s, reload forcé =====
+  // Réduit de 30s à 20s car le polling devrait détecter rapidement
+  setTimeout(() => {
+    if (!swActive && !reloadDeja) {
+      console.warn('⚠️ [PWA] Timeout 20s — reload forcé');
+      clearInterval(pollInterval);
+      effectuerReloadFinal('timeout 20s');
+    }
+  }, 20000);
 }
 
 // ========================================
