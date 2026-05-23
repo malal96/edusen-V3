@@ -276,15 +276,27 @@ function imprimerEDT(classe) {
   }).join('');
 
   const win = window.open('', '_blank');
+  const logo2 = school.logo2 || '';
+  const logoHtml = logo2
+    ? `<img src="${logo2}" alt="Logo école" style="max-width:80px;max-height:80px;object-fit:contain"/>`
+    : `<div style="width:80px;height:80px;border:1px dashed #ccc;display:flex;align-items:center;justify-content:center;font-size:10px;color:#aaa;text-align:center;border-radius:6px">Logo</div>`;
+
   win.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"/><title>Emploi du temps ${classe}</title>
     <style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:sans-serif;padding:20px}
     @media print{.no-print{display:none}@page{margin:1cm;size:A4 landscape}}.no-print{margin-bottom:16px;text-align:center}
     </style></head><body>
     <div class="no-print"><button onclick="window.print()" style="padding:8px 20px;background:#1a4731;color:#fff;border:none;border-radius:4px;cursor:pointer">🖨️ Imprimer</button></div>
-    <div style="text-align:center;margin-bottom:16px">
-      <h2 style="font-size:16px;color:#1a4731">${escapeHtml(school.nom || 'École')}</h2>
-      <p style="font-size:12px;color:#666">Emploi du temps — Classe de ${escapeHtml(classe)} — ${escapeHtml(school.annee || '')}</p>
+
+    <!-- En-tête : logo 2 à gauche | infos école au centre | espace équivalent à droite -->
+    <div style="display:flex;align-items:center;gap:14px;margin-bottom:16px;padding:10px 14px;border:1px solid #dde5d9;border-radius:8px">
+      <div style="width:80px;flex-shrink:0;display:flex;align-items:center;justify-content:center">${logoHtml}</div>
+      <div style="flex:1;text-align:center;min-width:0">
+        <h2 style="font-size:16px;color:#1a4731;margin-bottom:4px">${escapeHtml(school.nom || 'École')}</h2>
+        <p style="font-size:12px;color:#666">Emploi du temps — Classe de ${escapeHtml(classe)} — ${escapeHtml(school.annee || '')}</p>
+      </div>
+      <div style="width:80px;flex-shrink:0"></div>
     </div>
+
     <table style="width:100%;border-collapse:collapse">
       <thead><tr>
         <th style="padding:8px;background:#1a4731;color:#fff;border:1px solid #0d3522;font-size:11px;width:90px">Horaire</th>
