@@ -129,6 +129,7 @@ export async function afficherBulletins() {
       <select id="b-sem" style="padding:7px 12px;border:1px solid var(--border);border-radius:6px;background:#fff">
         ${SEMESTRES.map((t, i) => `<option value="${i+1}" ${(i+1) == semestre ? 'selected' : ''}>${t}</option>`).join('')}
       </select>
+      ${!estEnseignant ? `<button class="btn btn-sm" id="b-print-all" style="background:#c9933a;color:#fff" title="Imprimer tous les bulletins de la classe pour ce semestre">🖨️ Imprimer tous les bulletins</button>` : ''}
       ${peutSaisir ? `<button class="btn btn-primary btn-sm" id="b-save">💾 Enregistrer les notes</button>` : ''}
     </div>
     ${estGestionnaire ? `<div style="background:#fef9c3;border-left:4px solid #c9933a;padding:10px 14px;border-radius:6px;margin-bottom:14px;font-size:.85rem"><strong>Mode lecture seule :</strong> vous pouvez consulter les notes et imprimer les bulletins, mais pas modifier les notes.</div>` : ''}
@@ -179,6 +180,10 @@ export async function afficherBulletins() {
     document.querySelectorAll('[data-print]').forEach(b => {
       b.onclick = () => imprimerBulletin(b.dataset.print, semestre);
     });
+    const btnPrintAll = document.getElementById('b-print-all');
+    if (btnPrintAll) {
+      btnPrintAll.onclick = () => imprimerTousBulletins(classeActuelle, semestre);
+    }
   }
 }
 
@@ -186,9 +191,12 @@ export async function afficherBulletins() {
 //  IMPRESSION D'UN BULLETIN
 // ============================
 
-function imprimerBulletin(eleveId, semestre) {
+// Génère le HTML d'un seul bulletin (sans <html>/<head>/<body>)
+// Utilisé à la fois pour l'impression individuelle et l'impression groupée
+function genererHtmlBulletin(eleveId, semestre, options = {}) {
+  const { avecSautPage = false } = options;
   const e = store.eleves.find(x => x.id === eleveId);
-  if (!e) return;
+  if (!e) return '';
   const matieres = store.matieres[e.classe] || [];
   const moy = calculerMoyenne(eleveId, e.classe, semestre);
   const mention = moy !== null ? getMention(moy) : null;
@@ -204,13 +212,10 @@ function imprimerBulletin(eleveId, semestre) {
   // Drapeau Sénégal SVG
   const drapeau = `<svg width="36" height="24" viewBox="0 0 900 600" style="display:inline-block;vertical-align:middle;margin-right:8px"><rect width="300" height="600" x="0" fill="#00853f"/><rect width="300" height="600" x="300" fill="#fdef42"/><rect width="300" height="600" x="600" fill="#e31b23"/><polygon fill="#00853f" points="450,225 467.6,279.2 524.6,279.2 478.5,312.7 496.1,366.9 450,333.4 403.9,366.9 421.5,312.7 375.4,279.2 432.4,279.2"/></svg>`;
 
-  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"/><title>Bulletin ${e.prenom} ${e.nom}</title>
-    <style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:sans-serif;padding:20px}
-    @media print{.no-print{display:none}@page{margin:1cm}}.no-print{margin-bottom:16px;text-align:center}
-    table{width:100%;border-collapse:collapse}th,td{padding:6px 10px;border:1px solid #ddd;font-size:13px}
-    th{background:#1a4731;color:#fff}</style></head><body>
-    <div class="no-print"><button onclick="window.print()" style="padding:8px 20px;background:#1a4731;color:#fff;border:none;border-radius:4px;cursor:pointer">🖨️ Imprimer</button></div>
+  // Style pour saut de page (utilisé uniquement en impression groupée)
+  const styleSautPage = avecSautPage ? 'page-break-after:always;' : '';
 
+  return `<div class="bulletin-page" style="${styleSautPage}">
     <!-- Bandeau République du Sénégal -->
     <div style="text-align:center;margin-bottom:12px">
       ${drapeau}
@@ -272,9 +277,85 @@ function imprimerBulletin(eleveId, semestre) {
       <div>Signature Tuteur : _______________</div>
       <div>Date : ${formaterDate(new Date().toISOString().split('T')[0])}</div>
     </div>
+  </div>`;
+}
+
+// CSS commun à toutes les fenêtres d'impression de bulletins
+const STYLES_IMPRESSION_BULLETIN = `
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:sans-serif;padding:20px}
+  @media print{
+    .no-print{display:none}
+    @page{margin:1cm}
+    .bulletin-page{padding:0}
+  }
+  .no-print{margin-bottom:16px;text-align:center}
+  table{width:100%;border-collapse:collapse}
+  th,td{padding:6px 10px;border:1px solid #ddd;font-size:13px}
+  th{background:#1a4731;color:#fff}
+  .bulletin-page{padding-bottom:20px}
+`;
+
+function imprimerBulletin(eleveId, semestre) {
+  const e = store.eleves.find(x => x.id === eleveId);
+  if (!e) return;
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"/><title>Bulletin ${e.prenom} ${e.nom}</title>
+    <style>${STYLES_IMPRESSION_BULLETIN}</style></head><body>
+    <div class="no-print"><button onclick="window.print()" style="padding:8px 20px;background:#1a4731;color:#fff;border:none;border-radius:4px;cursor:pointer">🖨️ Imprimer</button></div>
+    ${genererHtmlBulletin(eleveId, semestre, { avecSautPage: false })}
     </body></html>`;
 
   const win = window.open('', '_blank');
   win.document.write(html);
   win.document.close();
+}
+
+// ============================
+//  IMPRESSION GROUPÉE DE TOUS LES BULLETINS D'UNE CLASSE
+// ============================
+
+function imprimerTousBulletins(classe, semestre) {
+  // Récupère tous les élèves actifs de la classe
+  const eleves = store.eleves.filter(e => e.classe === classe && e.statut === 'actif');
+
+  if (eleves.length === 0) {
+    toast('Aucun élève actif dans cette classe', 'error');
+    return;
+  }
+
+  // Trie les élèves par ordre alphabétique (nom, puis prénom)
+  eleves.sort((a, b) => {
+    const cmpNom = (a.nom || '').localeCompare(b.nom || '', 'fr');
+    if (cmpNom !== 0) return cmpNom;
+    return (a.prenom || '').localeCompare(b.prenom || '', 'fr');
+  });
+
+  // Génère le HTML : un bulletin par élève, séparés par un saut de page
+  // Le dernier bulletin n'a pas de saut de page pour éviter une page vide
+  const bulletinsHtml = eleves.map((e, index) => {
+    const estDernier = index === eleves.length - 1;
+    return genererHtmlBulletin(e.id, semestre, { avecSautPage: !estDernier });
+  }).join('');
+
+  const titre = `Bulletins ${classe} - ${SEMESTRES[semestre-1]}`;
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"/><title>${titre}</title>
+    <style>${STYLES_IMPRESSION_BULLETIN}</style></head><body>
+    <div class="no-print" style="background:#e8f5ee;padding:14px;border-radius:8px;margin-bottom:20px">
+      <div style="font-weight:700;color:#1a4731;margin-bottom:6px">📚 Impression groupée — ${escapeHtml(classe)} — ${SEMESTRES[semestre-1]}</div>
+      <div style="font-size:13px;color:#5a6a55;margin-bottom:10px">${eleves.length} bulletin${eleves.length > 1 ? 's' : ''} à imprimer (un par page)</div>
+      <button onclick="window.print()" style="padding:8px 20px;background:#1a4731;color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600">🖨️ Imprimer tous les bulletins</button>
+    </div>
+    ${bulletinsHtml}
+    </body></html>`;
+
+  const win = window.open('', '_blank');
+  if (!win) {
+    toast('Veuillez autoriser les pop-ups pour imprimer', 'error');
+    return;
+  }
+  win.document.write(html);
+  win.document.close();
+  toast(`${eleves.length} bulletin${eleves.length > 1 ? 's' : ''} prêt${eleves.length > 1 ? 's' : ''} à imprimer`, 'success');
 }
