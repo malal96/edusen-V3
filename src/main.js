@@ -50,11 +50,12 @@ function afficherBanniereUpdate() {
 
   document.getElementById('btn-update-now').onclick = () => {
     // 1. Affiche l'overlay de chargement avec barre de progression
+    //    L'overlay attendra le vrai événement "controllerchange" avant de recharger
     afficherOverlayMiseAJour();
     // 2. Lance la mise à jour réelle en arrière-plan
-    //    updateSW(true) déclenche le téléchargement + skipWaiting + reload
-    //    On n'attend PAS la promesse car le reload interrompt naturellement le flux
-    updateSW(true);
+    //    On passe false pour NE PAS recharger automatiquement —
+    //    c'est l'overlay qui gère le reload quand le nouveau SW prend le contrôle
+    updateSW(false);
   };
   document.getElementById('btn-update-later').onclick = () => {
     banner.classList.remove('show');
@@ -63,16 +64,17 @@ function afficherBanniereUpdate() {
 }
 
 /**
- * Affiche un overlay plein écran avec barre de progression animée
- * pendant la mise à jour de l'application.
+ * Affiche un overlay plein écran avec barre de progression synchronisée
+ * avec le VRAI cycle de vie du Service Worker.
  *
- * La progression est simulée car le SW ne fournit pas d'événement
- * de progression réel. L'animation s'adapte :
- *  - 0% → 60% en 2s (téléchargement)
- *  - 60% → 90% en 2s (installation)
- *  - 90% → 95% en 2s (préparation, puis bloque)
- *  - 100% atteint juste avant que la page recharge
- *  - Sécurité : reload forcé après 15s si rien ne se passe
+ * Stratégie :
+ *  - Phase 1 (0% → 70%) : progression simulée tant que le SW n'a pas terminé
+ *    son téléchargement/installation. Plafonne à 70% en attendant.
+ *  - Phase 2 (70% → 95%) : déclenchée par l'événement 'controllerchange'
+ *    (= le nouveau SW vient de prendre le contrôle, donc la mise à jour
+ *    est réellement appliquée). Animation rapide vers 95%.
+ *  - Phase 3 (95% → 100%) : juste avant le reload, transition propre.
+ *  - Sécurité : si rien ne se passe en 30s, on force un reload.
  */
 function afficherOverlayMiseAJour() {
   // Masque la bannière
@@ -110,45 +112,80 @@ function afficherOverlayMiseAJour() {
   const percent = document.getElementById('update-progress-percent');
   const step = document.getElementById('update-overlay-step');
 
-  const startTime = Date.now();
   let progress = 0;
+  let phase = 1;          // 1 = attente SW, 2 = SW actif, 3 = reload
+  let swReady = false;    // Devient true quand le nouveau SW a pris le contrôle
 
+  // Met à jour visuellement la barre
+  function setProgress(val, message) {
+    progress = val;
+    const rounded = Math.round(progress);
+    if (fill) fill.style.width = rounded + '%';
+    if (percent) percent.textContent = rounded + '%';
+    if (message && step) step.textContent = message;
+  }
+
+  // ===== PHASE 1 : progression simulée tant que le SW travaille =====
+  // On monte doucement jusqu'à 70% maximum, puis on attend.
+  const phase1Start = Date.now();
   const interval = setInterval(() => {
-    const elapsed = Date.now() - startTime;
-    if (elapsed < 2000) {
-      progress = (elapsed / 2000) * 60;
-      step.textContent = 'Téléchargement de la nouvelle version...';
-    } else if (elapsed < 4000) {
-      progress = 60 + ((elapsed - 2000) / 2000) * 30;
-      step.textContent = 'Installation des nouveaux fichiers...';
-    } else if (elapsed < 6000) {
-      progress = 90 + ((elapsed - 4000) / 2000) * 5;
-      step.textContent = 'Préparation du redémarrage...';
+    if (swReady) return; // Phase 2 prend le relais
+    const elapsed = Date.now() - phase1Start;
+    if (elapsed < 1500) {
+      setProgress((elapsed / 1500) * 40, 'Téléchargement de la nouvelle version...');
+    } else if (elapsed < 3500) {
+      setProgress(40 + ((elapsed - 1500) / 2000) * 25, 'Installation des nouveaux fichiers...');
     } else {
-      progress = 95;
-      step.textContent = 'Redémarrage imminent...';
+      // Plafond à 70% — on attend le vrai signal du SW
+      setProgress(Math.min(70, progress + 0.1), 'Application des modifications...');
     }
-    const rounded = Math.min(Math.round(progress), 95);
-    fill.style.width = rounded + '%';
-    percent.textContent = rounded + '%';
-  }, 50);
+  }, 80);
 
-  // Sécurité : si le reload tarde trop (>15s), force le reload manuellement
+  // ===== PHASE 2 : déclenchée quand le nouveau SW prend le contrôle =====
+  // Cet événement est LE signal fiable que la mise à jour est réellement active.
+  let controllerChanged = false;
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (controllerChanged) return; // Évite les doublons
+      controllerChanged = true;
+      swReady = true;
+      phase = 2;
+
+      // Animation rapide de la position actuelle vers 95%
+      const startProgress = progress;
+      const phase2Start = Date.now();
+      const phase2Duration = 1000; // 1 seconde pour aller à 95%
+
+      const phase2Interval = setInterval(() => {
+        const elapsed = Date.now() - phase2Start;
+        if (elapsed >= phase2Duration) {
+          clearInterval(phase2Interval);
+          clearInterval(interval);
+          setProgress(95, 'Finalisation...');
+
+          // ===== PHASE 3 : 100% puis reload =====
+          setTimeout(() => {
+            setProgress(100, 'Redémarrage de l\'application...');
+            setTimeout(() => {
+              window.location.reload();
+            }, 400);
+          }, 300);
+        } else {
+          const ratio = elapsed / phase2Duration;
+          setProgress(startProgress + (95 - startProgress) * ratio, 'Finalisation...');
+        }
+      }, 30);
+    });
+  }
+
+  // ===== SÉCURITÉ : si rien ne se passe en 30s, force le reload =====
   setTimeout(() => {
-    clearInterval(interval);
-    if (fill) fill.style.width = '100%';
-    if (percent) percent.textContent = '100%';
-    if (step) step.textContent = 'Rechargement de l\'application...';
-    setTimeout(() => window.location.reload(), 500);
-  }, 15000);
-
-  // Transition propre juste avant le reload naturel
-  window.addEventListener('beforeunload', () => {
-    clearInterval(interval);
-    if (fill) fill.style.width = '100%';
-    if (percent) percent.textContent = '100%';
-    if (step) step.textContent = 'Rechargement...';
-  });
+    if (!controllerChanged) {
+      clearInterval(interval);
+      setProgress(100, 'Rechargement de l\'application...');
+      setTimeout(() => window.location.reload(), 500);
+    }
+  }, 30000);
 }
 
 // ========================================
