@@ -4,6 +4,8 @@ import { VitePWA } from 'vite-plugin-pwa';
 export default defineConfig({
   plugins: [
     VitePWA({
+      // 'prompt' = on garde le contrôle d'afficher la bannière à l'utilisateur
+      // (registerType est OK, mais on ajoute skipWaiting/clientsClaim dans workbox)
       registerType: 'prompt',
       includeAssets: ['icon-192.png', 'icon-512.png', 'apple-touch-icon.png'],
       manifest: {
@@ -24,6 +26,10 @@ export default defineConfig({
         ]
       },
       workbox: {
+        // CRITIQUE pour la mise à jour : force le nouveau SW à prendre le contrôle immédiatement
+        // dès qu'on lui envoie SKIP_WAITING, sans attendre que tous les onglets soient fermés.
+        skipWaiting: true,
+        clientsClaim: true,
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
         runtimeCaching: [
           {
